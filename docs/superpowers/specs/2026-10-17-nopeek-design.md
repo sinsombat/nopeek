@@ -22,10 +22,12 @@
 - **ไม่ต้องขอสิทธิ์ Screen Recording, Accessibility, Full Disk** — ขอแค่ notification
 - idle CPU < 1%, memory < 100 MB
 - ติดตั้งด้วย `make install` คำสั่งเดียว; `make uninstall` ถอนสะอาด
+- **Monitor Gap:** ถ้าระบบเฝ้าขาดช่วงเกิน threshold (default 15 นาที) ต้องรายงานเองตอน start — "เงียบ" ต้องไม่ถูกตีความเป็น "ปลอดภัย" โดยไม่รู้ตัว
+- **Calibration:** wizard ทดสอบ detector จริงบนเครื่องผู้ใช้ (แคปจอ/กล้อง/ไมค์) และเป็น gate ของ M3/M4
 
 ## 2. Scope & Non-goals
 
-**ทำ:** detect + notify + เก็บ evidence log; จัดชั้น severity; allowlist แอปที่ user trust; UI จัดการผ่าน menu bar
+**ทำ:** detect + notify + เก็บ evidence log; จัดชั้น severity; allowlist แอปที่ user trust; UI จัดการผ่าน menu bar; **Monitor Gap Report**; **Calibration Wizard**; **System Checkup**; **Export หลักฐาน (md + csv + ndjson)**
 
 **ไม่ทำ (โดยเจตนา):** บล็อก/หยุดการแคป; ต่อสู้เคส kernel-level/kext; สิ่งที่เกิดฝั่ง server โดยไม่แตะเครื่อง; Windows/Linux port; auto-update; notarization (แจกเป็น source, build เอง); preferences window แยก (config file + เมนู)
 
@@ -42,8 +44,12 @@
   - `Throttler` — dedup key `(kind, actor, tier)` ภายใน 60s รวมเป็น count
   - `EvidenceLog` — เขียน ndjson ลง `~/Library/Logs/NoPeek/`, rotate รายวัน, purge >30 วันตอน start
   - `ConfigStore` — โหลด/merge default กับ `~/.config/nopeek/config.json`, auto-reload เมื่อไฟล์เปลี่ยน (DispatchSource)
+  - `GapDetector` — ตอน start อ่าน timestamp event/heartbeat ล่าสุดใน evidence log; ถ้า gap > `gapAlertThresholdMinutes` (default 15) → ปล่อย `monitor-gap` + notification (ไม่ขึ้นกับ pause) ข้อความ "ไม่ได้เฝ้าช่วง HH:MM–HH:MM (เครื่องอาจ sleep/ปิด หรือแอปถูกหยุด)"
+  - `CalibrationService` — state machine ทดสอบ detector ทีละตัว (screen/camera/mic): แนะนำผู้ใช้ทำ action แล้วรอ event จริง timeout 60s/ตัว; ผลเก็บที่ `~/Library/Application Support/NoPeek/calibration.json` + เขียน log
+  - `CheckupService` — รวบรวมสถานะช่องทางถูกส่อง: remote services enabled (launchctl read-only), org agents ที่กำลังรัน (ใช้ข้อมูล ProcessWatch), listeners นอก loopback (`netstat`) → report + deep links ไป System Settings
+  - `Exporter` — อ่าน evidence log ตามช่วง (preset 7 วัน / 30 วัน / ทั้งหมด) → Markdown summary + CSV + สำเนา ndjson ลง `~/Downloads/`
 - **`NoPeekApp`** (executable — UI + wiring เท่านั้น)
-  - `NSStatusItem` + เมนู, `UNUserNotificationCenter`, `BannerPresenter` (แบนเนอร์แดง), ประกอบทุกอย่าง
+  - `NSStatusItem` + เมนู, `UNUserNotificationCenter`, `BannerPresenter` (แบนเนอร์แดง), UI ของ Calibration Wizard / System Checkup / Export, ประกอบทุกอย่าง
 
 **Data flow:**
 
@@ -110,16 +116,21 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 | NORMAL | ✅ (throttled, หยุดเมื่อ pause) | config `sound` | ❌ | ✅ |
 | SYSTEM_NOISE / ALLOWLIST | ❌ | ❌ | ❌ | ✅ |
 
+**หมายเหตุ — "monitor-health" notifications:** event ของระบบเอง (`monitor-gap`, ผล calibration/checkup/export) ไม่ผูกกับ tier ข้างบน: `monitor-gap` แจ้งเสมอ (ไม่ขึ้นกับ pause/config) เพราะเป็นเรื่องความน่าเชื่อถือของเครื่องมือเอง
+
 ## 6. Alert UX
 
 **ไอคอนเมนูบาร์ 4 สถานะ:** 🛡️ ปกติ / 🔴 กำลังถูกส่องอยู่ (มี event tier ≠ noise/allowlist ภายใน 10s; ORG ค้างแดง 60s) / 🟡 degraded (log stream ตาย) / ⏸️ paused
 
 **Dropdown เมนู:**
 
-- บรรทัดสถานะ: "เฝ้าระวังอยู่ — ไม่มีการส่อง" หรือ "กำลังถูกแคปจอโดย X (เมื่อ 3s ที่แล้ว)"
+- บรรทัดสถานะ: "เฝ้าระวังอยู่ — ไม่มีการส่อง" หรือ "กำลังถูกแคปจอโดย X (เมื่อ 3s ที่แล้ว)"; ถ้ามี gap ล่าสุด: "⚠️ ไม่ได้เฝ้าช่วง HH:MM–HH:MM"
 - 10 events ล่าสุด: เวลา + tier + actor + kind
 - `Trust แอปนี้…` (เลือกจาก actor ที่เพิ่งเห็น) / `ยกเลิก trust`
 - `Test alert` (ยิง event ปลอมครบทุก tier ให้ดูว่าแบนเนอร์/เสียงทำงาน)
+- `Calibration Wizard…` (ครั้งแรกเปิดอัตโนมัติ)
+- `System Checkup…` (สรุปช่องทางที่เปิดอยู่ + deep link ไป System Settings)
+- `Export รายงาน…` (7 วัน / 30 วัน / ทั้งหมด → md + csv + ndjson)
 - `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`
 - `เปิดโฟลเดอร์ log` / `เปิด config` / `Reload config`
 - `About` / `Quit`
@@ -148,6 +159,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
   "bannerLevel": "screenSaver",
   "orgBannerCooldownSeconds": 60,
   "logRetentionDays": 30,
+  "gapAlertThresholdMinutes": 15,
   "replaceDefaultLists": false,
   "orgPatterns": ["/Library/ManageEngine/", "PanGPS", "dcondemand"],
   "remoteControlExtra": [],
@@ -169,7 +181,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 ## 8. Evidence Log
 
 - ไฟล์: `~/Library/Logs/NoPeek/events-YYYY-MM-DD.ndjson` (1 event = 1 บรรทัด JSON), เก็บ 30 วัน (`logRetentionDays`)
-- บันทึก **ทุก** event ทุก tier + lifecycle events: `monitor-started`, `monitor-degraded`, `monitor-recovered`, `config-reloaded`, `heartbeat` (ทุก 5 นาที — ใช้ตรวจ gap ได้)
+- บันทึก **ทุก** event ทุก tier + lifecycle events: `monitor-started`, `monitor-degraded`, `monitor-recovered`, `monitor-gap`, `config-reloaded`, `calibration-result`, `checkup-run`, `export-created`, `heartbeat` (ทุก 5 นาที — ใช้ตรวจ gap ได้)
 - Schema ต่อบรรทัด:
 
 ```json
@@ -199,6 +211,7 @@ nopeek/
 ```
 
 - LaunchAgent: `~/Library/LaunchAgents/com.sinsombat.nopeek.plist` — `Program` ชี้ `~/Applications/NoPeek.app/Contents/MacOS/NoPeek`, `RunAtLoad=true`, `KeepAlive=true`, `ThrottleInterval=10`
+- State ของแอป (calibration cache): `~/Library/Application Support/NoPeek/`
 - Ad-hoc codesign: `codesign --force --deep -s - NoPeek.app` (ไม่ต้อง Developer ID; build เองบนเครื่อง → ไม่มี quarantine)
 - **Requirements:** macOS 26+ (ทดสอบจริงบน 27) + Xcode Command Line Tools; ไม่มี dependency จาก brew
 - Info.plist: `LSUIElement=true`, `CFBundleIdentifier=com.sinsombat.nopeek`, `NSHumanReadableCopyright`, ไม่ประกาศ usage description ใดๆ (ไม่ใช้ API ที่ต้องขอสิทธิ์)
@@ -217,6 +230,8 @@ nopeek/
 - throttler: count รวมใน 60s, แยก key ถูกต้อง
 - config: merge defaults+user, union lists, reload
 - retention: purge ตัดไฟล์เกิน N วัน
+- gap detector: คำนวณ gap จาก heartbeat/event ล่าสุด, เคส log ว่าง/ไฟล์วันก่อนหน้า
+- exporter: filter ช่วงเวลา + สรุปจำนวนตาม tier ถูกต้อง
 
 **Integration (ทำมือตาม procedure, เขียนใน README):**
 
@@ -228,10 +243,14 @@ nopeek/
 6. **ORG test:** ใส่ `"WindowManager"` ใน `orgPatterns` (test config) → ต้องได้ ORG + แบนเนอร์แดง + **mute ไม่ได้** (กติกา org มาก่อน systemNoise — เคสนี้พิสูจน์ลำดับ)
 7. **Degraded:** `pkill -f "log stream"` → ไอคอนเหลือง ≤10s → ฟื้นเอง ≤30s + log `monitor-recovered`
 8. **Test alert:** กดในเมนู → ครบทุก tier
-9. **Resource:** เปิด 5 นาที idle → CPU < 1%, memory < 100 MB (Activity Monitor)
-10. **Install:** เครื่องสะอาด → `make install` → ไอคอนโผล่หลัง login; `make uninstall` → ไม่มีร่องรอย (ยกเว้น log/config ที่ขอเก็บ)
+9. **Gap:** ตั้ง `gapAlertThresholdMinutes:1` → ปิดแอป 2 นาที → เปิดใหม่ → ได้ notification gap + log `monitor-gap` + เมนูโชว์ช่วง
+10. **Calibration:** รัน wizard ครบ 3 detector → ✅ ทุกตัว และผลถูกบันทึกใน `calibration.json`
+11. **Checkup:** รัน → report ตรงกับความจริงบนเครื่อง (services/agents/listeners)
+12. **Export:** เลือก 7 วัน → ได้ md + csv (+ ndjson) ที่จำนวน events ตรงกับ log
+13. **Resource:** เปิด 5 นาที idle → CPU < 1%, memory < 100 MB (Activity Monitor)
+14. **Install:** เครื่องสะอาด → `make install` → ไอคอนโผล่หลัง login; `make uninstall` → ไม่มีร่องรอย (ยกเว้น log/config ที่ขอเก็บ)
 
-**Acceptance = ผ่านทั้ง 10 ข้อ + unit test เขียว**
+**Acceptance = ผ่านทั้ง 14 ข้อ + unit test เขียว**
 
 ## 12. Risks & Mitigations
 
@@ -250,14 +269,15 @@ nopeek/
 - ครอบคลุมทุกอย่างที่ผ่าน userland ของ macOS: ScreenCaptureKit/TCC, daemon remote-control, กล้อง, ไมค์
 - **จับไม่ได้:** kext/kernel-level surveillance, การดูจากฝั่ง server ที่ไม่แตะเครื่อง, อุปกรณ์ภายนอก, และ gap ที่เกิดก่อนแอปถูกติดตั้ง
 - กล้อง/ไมค์แบบ poll บอกได้แค่ "ถูกใช้" — ชื่อผู้ใช้เป็น best-effort
+- System Checkup ให้ deep link แทนการอ่านรายชื่อ app ที่มีสิทธิ์ Screen Recording (ต้อง Full Disk Access — NoPeek ไม่ขอ)
 - บน macOS 26/27 สัญญาณ "จุดม่วงจากระบบ" (WindowManager) ถูกจัดเป็น SYSTEM_NOISE โดย default — ถ้า user ต้องการจับแม้กระทั่งสัญญาณนี้ ก็ทำได้ผ่าน config: ตั้ง `replaceDefaultLists: true` แล้วนิยาม `systemNoise` เองโดยไม่ใส่ WindowManager
 
 ## 14. Milestones (input สำหรับ implementation plan)
 
 - **M0** — repo skeleton (SwiftPM, Makefile, scripts) + แอปขึ้นเมนูบาร์ + ขอ notification permission + Test alert → **verify OS integration ก่อนเป็นอันดับแรก**
 - **M1** — LogStreamReader + ndjson parser + fixtures จาก ⌘⇧5 จริง
-- **M2** — Classifier + Throttler + EvidenceLog (unit test ครบ)
-- **M3** — Screen capture detection end-to-end (⌘⇧5 → NORMAL ≤5s; Mission Control → เงียบ)
-- **M4** — Pollers: process watch + กล้อง + ไมค์ + tier REMOTE
-- **M5** — Alert UX ครบ: แบนเนอร์แดง, เมนู actions, allowlist, pause, config reload, i18n
-- **M6** — Packaging ขั้นสุดท้าย: uninstall, README EN/TH, retention purge + รัน acceptance ครบ 10 ข้อ
+- **M2** — Classifier + Throttler + EvidenceLog + **GapDetector** (unit test ครบ)
+- **M3** — Screen capture detection end-to-end (⌘⇧5 → NORMAL ≤5s; Mission Control → เงียบ) + calibration ของ screen signal
+- **M4** — Pollers: process watch + กล้อง + ไมค์ + tier REMOTE + calibration ครบ 3 detector
+- **M5** — Alert UX ครบ: แบนเนอร์แดง, เมนู actions, allowlist, pause, config reload, i18n + **Calibration Wizard / System Checkup / Export UI**
+- **M6** — Packaging ขั้นสุดท้าย: uninstall, README EN/TH, retention purge + รัน acceptance ครบ 14 ข้อ
