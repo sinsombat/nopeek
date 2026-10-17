@@ -1,19 +1,30 @@
 import AppKit
 
+import PWCore
+
 // NoPeek — menu-bar app bootstrap (M0 skeleton).
 //
 // This file is the process entry point only. It keeps the process out of App
-// Nap, puts the shield in the menu bar and offers Quit. Later tasks grow on it:
-// T3 adds the `Test alert` item, T12 wires the watchers via `AppController`,
-// T17 replaces the throwaway menu with the real one.
+// Nap, puts the shield in the menu bar and offers `Test alert` + Quit. Later
+// tasks grow on it: T12 wires the watchers via `AppController`, T17 replaces
+// the throwaway menu with the real one.
 //
-// Spec references: §9 (LSUIElement, no Dock icon), §12 (App Nap mitigation).
+// Spec references: §6 (alert UX, notification permission), §9 (LSUIElement, no
+// Dock icon), §10 (TH default, all copy through `Strings`), §12 (App Nap
+// mitigation).
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Token of the `.userInitiated` activity, retained for the process lifetime.
     private var activity: NSObjectProtocol?
     private var statusItem: NSStatusItem?
+
+    /// Notification delivery (spec §6). Notification permission is the only
+    /// permission this app ever requests.
+    private let notifications = NotificationService()
+
+    /// Spec §6 warning row: shown only while notification access is denied.
+    private var notificationWarningItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Spec §12: App Nap would delay the pollers past the 5 s detect budget.
@@ -23,6 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         setUpStatusItem()
+
+        // Spec §6: request notification permission on first launch. The system
+        // prompts only while the status is `notDetermined`, so re-launches after
+        // a decision never nag.
+        Task {
+            await notifications.requestPermission()
+            updateNotificationWarning()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -31,30 +50,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Status bar item with an SF Symbol shield and a Quit-only menu.
+    /// Status bar item with an SF Symbol shield and the M0 menu.
     private func setUpStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = item.button {
-            let icon = NSImage(systemSymbolName: "shield", accessibilityDescription: "NoPeek")
+            let icon = NSImage(
+                systemSymbolName: "shield",
+                accessibilityDescription: Strings.t("app.name")
+            )
             icon?.isTemplate = true
             button.image = icon
             // Defensive fallback: an empty status item would be invisible.
             if icon == nil {
-                button.title = "NoPeek"
+                button.title = Strings.t("app.name")
             }
         }
 
         let menu = NSMenu()
+        menu.delegate = self
+
+        // Spec §6: permission warning (hidden until we know access is denied).
+        // The red banner path does not depend on notification permission.
+        let warning = NSMenuItem(
+            title: Strings.t("menu.notif.denied"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        warning.isEnabled = false
+        warning.isHidden = true
+        menu.addItem(warning)
+        notificationWarningItem = warning
+
+        // Spec §6 `Test alert`: one fake event per user-facing tier so banner
+        // and sound can be verified without waiting for a real capture.
+        let testItem = NSMenuItem(
+            title: Strings.t("menu.test"),
+            action: #selector(testAlert(_:)),
+            keyEquivalent: ""
+        )
+        testItem.target = self
+        menu.addItem(testItem)
+
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(
-            title: "Quit NoPeek",
+            title: Strings.t("menu.quit"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
         menu.addItem(quitItem)
-        item.menu = menu
 
+        item.menu = menu
         statusItem = item
+    }
+
+    // MARK: - Menu state
+
+    /// Re-check the permission whenever the menu opens, so revoking notification
+    /// access in System Settings surfaces the warning without a relaunch.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        updateNotificationWarning()
+        Task {
+            await notifications.refreshStatus()
+            updateNotificationWarning()
+        }
+    }
+
+    private func updateNotificationWarning() {
+        notificationWarningItem?.isHidden = !notifications.isDenied
+    }
+
+    // MARK: - Actions
+
+    /// Spec §6 `Test alert`: posts one fake notification per user-facing tier.
+    /// `post(title:body:tier:)` sets `threadIdentifier = "nopeek-<tier>"`, so the
+    /// three alerts arrive pre-grouped; the tier names in the body make them
+    /// distinguishable in Notification Center.
+    @objc private func testAlert(_ sender: Any?) {
+        for tier in [Tier.org, .remote, .normal] {
+            let name = tier.rawValue.lowercased()
+            notifications.post(
+                title: Strings.t("notif.\(name).title"),
+                body: String(format: Strings.t("notif.test.body"), tier.rawValue),
+                tier: tier
+            )
+        }
     }
 }
 
