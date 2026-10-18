@@ -9,20 +9,26 @@ import PWCore
 /// Control 2–3 times.
 ///
 /// `Tests/PWCoreTests/Fixtures/probe-2026-10-18.ndjson` is the curated subset
-/// (the raw 2181-line / 2.2 MB probe stays out of the repo). Its last three
-/// lines are hand-edited cases: a redacted `processImagePath` kept matchable
-/// through a synthetic `process` key, a redacted path matched through the
-/// `com.apple.ScreenCaptureKit` subsystem, and a JSON line truncated
-/// mid-object. The non-JSON preamble line is an inline string (it is text, not
-/// ndjson).
+/// (the raw 2181-line / 2.2 MB probe stays out of the repo).
 ///
-/// The tests pin the two halves of spec §5's precision requirement: real
-/// capture truth signals (`replayd`'s `updateScreenCaptureDidStart` and the
-/// ScreenCaptureKit construction calls) must parse, and so must Mission
-/// Control's one readable WindowManager transition line (spec §11-2: explore
-/// noise lands in the evidence log, as SYSTEM_NOISE). Everything around it —
-/// WindowManager's XPC / connection / window-bookkeeping chatter — must still
-/// return `nil` so it never reaches the Classifier as a candidate.
+/// The tests pin the two halves of spec §5's precision requirement:
+/// - **Capture truth signals parse.** `screencapture`'s ScreenCaptureKit
+///   construction calls and the *capture-session* variants of replayd
+///   (`:165 … hasStarted=1`, the `_block_invoke:186 … screenAttribution
+///   complete` lines) must produce events.
+/// - **Everything the probe showed to be ambient must not.** That includes
+///   Mission Control's WindowManager chatter (except its one transition line,
+///   spec §11-2), `screencaptureui`'s XPC / prefs traffic, **replayd's
+///   `:161 client has entitlement to suppress screen indicator` echo** — which
+///   a live Mission-Control-only probe showed to be the *only* replayd variant
+///   Mission Control produces (ruling R15) — and replayd's `hasStarted=0`
+///   stream-stop lines (kinds are frozen, nothing consumes a stop).
+///
+/// Three fixture lines are hand-edited cases: a redacted `processImagePath`
+/// kept matchable through a synthetic `process` key (on the capture-session
+/// variant), a redacted path matched through the `com.apple.ScreenCaptureKit`
+/// subsystem, and a JSON line truncated mid-object. The non-JSON preamble line
+/// is an inline string (it is text, not ndjson).
 @Suite struct LogLineParserTests {
 
     // MARK: - Helpers
@@ -71,21 +77,25 @@ import PWCore
         return try #require(String(data: data, encoding: .utf8))
     }
 
-    /// The millisecond value the fixture's `2026-10-18 10:30:56.186783+0700`
-    /// corresponds to, built without reusing the parser's own date code.
+    /// The millisecond value the fixture's `2026-10-18 10:31:55.975472+0700`
+    /// (the replayd capture-session line) corresponds to, built without
+    /// reusing the parser's own date code.
     private static func expectedReportedTimestamp() throws -> Date {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return try #require(formatter.date(from: "2026-10-18T03:30:56.186Z"))
+        return try #require(formatter.date(from: "2026-10-18T03:31:55.975Z"))
     }
 
     // MARK: - Real capture lines
 
-    @Test func testParsesScreenCaptureLine() throws {
-        // replayd is the process that owns the on-screen capture indicator;
-        // `updateScreenCaptureDidStart` is the truth signal that a capture began.
+    @Test func testParsesReplaydCaptureSessionLine() throws {
+        // replayd's capture-session variant: a real capture started a stream
+        // (`hasStarted=1`). Its `:161` sibling — "client has entitlement to
+        // suppress screen indicator" — is deliberately *not* a candidate: a
+        // live Mission-Control-only probe (ruling R15) showed it is the only
+        // replayd line Mission Control produces.
         let line = try Self.fixtureLine(
-            containing: ["updateScreenCaptureDidStart", "client has entitlement to suppress screen indicator"]
+            containing: ["updateScreenCaptureDidStart", "hasStarted=1"]
         )
         let event = try #require(Self.parser.parse(line: line))
 
@@ -97,16 +107,16 @@ import PWCore
 
         let summary = try #require(event.rawSummary)
         #expect(summary.contains("updateScreenCaptureDidStart"))
-        #expect(summary.contains("suppress screen indicator"))
+        #expect(summary.contains("hasStarted=1"))
         #expect(summary.count <= 200)
     }
 
     @Test func testTimestampParsesLogStreamFormat() throws {
         // log stream ndjson timestamps look like
-        // "2026-10-18 10:30:56.186783+0700" — space separator, 6-digit
+        // "2026-10-18 10:31:55.975472+0700" — space separator, 6-digit
         // fraction, RFC-822 offset (see LogLineParserTests docs).
         let line = try Self.fixtureLine(
-            containing: ["updateScreenCaptureDidStart", "client has entitlement to suppress screen indicator"]
+            containing: ["updateScreenCaptureDidStart", "hasStarted=1"]
         )
         let event = try #require(Self.parser.parse(line: line))
 
@@ -116,18 +126,51 @@ import PWCore
         #expect(abs(event.ts.timeIntervalSince(expected)) <= 0.002)
     }
 
-    @Test func testParsesAllCapturedCaptureStartLines() throws {
-        // The probe contains 11 real replayd updateScreenCaptureDidStart lines
-        // (plus one hand-edited redacted copy covered by its own test).
+    @Test func testParsesEveryReplaydCaptureSessionLine() throws {
+        // The probe holds two capture sessions' worth of session variants:
+        // 2 × `hasStarted=1` and 4 × the `:186 … screenAttribution complete`
+        // lines (plus the hand-edited redacted copy covered by its own test).
         let lines = try Self.fixtureLines().filter {
-            $0.contains("updateScreenCaptureDidStart") && !$0.contains("<private>")
+            ($0.contains("hasStarted=1") || $0.contains("update screenAttribution complete"))
+                && !$0.contains("<private>")
         }
-        #expect(lines.count == 11)
+        #expect(lines.count == 6)
 
         for line in lines {
             let event = try #require(Self.parser.parse(line: line), "line did not parse: \(line.prefix(120))")
             #expect(event.kind == .screenCapture)
             #expect(event.actor == "replayd")
+        }
+    }
+
+    @Test func testReplaydMissionControlEchoStaysNil() throws {
+        // R15: the probe's three `:161 client has entitlement to suppress
+        // screen indicator` lines all sit at Mission Control moments
+        // (10:30:56.186 +0.17 s after a gesture enter, 10:31:16.23 as its
+        // delayed echo, 10:32:32.216 +0.05 s after a hotKey enter), and the
+        // live MC-only probe / the pre-fix app both reproduced exactly this
+        // variant with no capture session anywhere near. It must not reach
+        // the Classifier as a candidate, or Mission Control would notify.
+        let echo = try Self.fixtureLines().filter {
+            $0.contains("client has entitlement to suppress screen indicator")
+        }
+        #expect(echo.count == 3, "expected the probe's three :161 lines")
+
+        for line in echo {
+            #expect(Self.parser.parse(line: line) == nil, "MC echo parsed: \(line.prefix(120))")
+        }
+    }
+
+    @Test func testReplaydStopLinesStayNil() throws {
+        // `hasStarted=0` is the stream stop. Kinds are frozen (R5: no
+        // "capture stopped" kind) and nothing consumes a stop, so the stops
+        // are not candidates either — the session's `hasStarted=1` line(s)
+        // already carry the capture.
+        let stops = try Self.fixtureLines().filter { $0.contains("hasStarted=0") }
+        #expect(stops.count == 2, "expected the probe's two stop lines")
+
+        for line in stops {
+            #expect(Self.parser.parse(line: line) == nil, "stop line parsed: \(line.prefix(120))")
         }
     }
 
@@ -352,9 +395,12 @@ import PWCore
             }
         }
 
-        // 11 real replayd lines + 1 redacted replayd + 1 redacted
-        // ScreenCaptureKit line + 5 screencapture SC-construction lines
+        // 6 replayd capture-session variants (2 × hasStarted=1, 4 × :186)
+        // + 1 hand-edited redacted replayd session line + 5 screencapture
+        // SC-construction lines + 1 redacted ScreenCaptureKit line
         // + 2 Mission Control transition lines (spec §11-2 / ruling R14).
-        #expect(parsed == 20)
+        // The 3 :161 Mission Control echoes and the 2 hasStarted=0 stops are
+        // deliberately absent from the count — they are not candidates (R15).
+        #expect(parsed == 15)
     }
 }

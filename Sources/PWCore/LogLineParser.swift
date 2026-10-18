@@ -69,11 +69,18 @@ extension KindRule {
 
     /// The shipped capture rules, ordered by specificity (first match wins).
     ///
-    /// - `replayd` + `updateScreenCaptureDidStart` is the screen-capture
-    ///   *truth* signal on this machine: replayed is the indicator owner and
-    ///   logs when a capture session starts (the probe's line also notes
-    ///   whether the client may suppress the purple indicator — that stays in
-    ///   `rawSummary` for the evidence log, it is not a separate kind).
+    /// - `replayd`, the process that owns the on-screen capture indicator, is
+    ///   the capture-*session* signal: the rule keeps the session variants and
+    ///   rejects the ambient one. `…:165 … hasStarted=1` (a stream started for
+    ///   a client) and `…_block_invoke:186 … screenAttribution complete` (the
+    ///   media-status attribution finished) are user/app-initiated capture
+    ///   evidence. **`…:161 client has entitlement to suppress screen
+    ///   indicator` is excluded on purpose** (ruling R15): a live
+    ///   Mission-Control-only probe showed it is the only replayd variant
+    ///   Mission Control produces, while it never appeared during the probe's
+    ///   real capture session — keeping it would make Mission Control notify.
+    ///   `hasStarted=0` (the stop) is excluded too: kinds are frozen (R5, no
+    ///   "capture stopped") and nothing consumes a stop.
     /// - `screencaptureui` / `screencapture` are mapped only on ScreenCaptureKit
     ///   construction calls (`SCDisplay`/`SCShareableContent`/`SCContentFilter`).
     ///   The same calls appear under a third-party capturer's own
@@ -89,9 +96,17 @@ extension KindRule {
     ///   `ScreenCaptureApprovalUI` rule is kept for macOS versions that host
     ///   the approval prompt in its own process (absent from the probe).
     public static let screenCaptureDefaults: [KindRule] = [
+        // replayd's capture-session variants (ruling R15; see the bullet list
+        // above and the diff evidence in task-12-report.md): `hasStarted=1`
+        // starts a session, the `:186` attribution-complete line follows it.
+        // The MC echo (`:161 client has entitlement to suppress screen
+        // indicator`) and the stops (`hasStarted=0`) deliberately do not
+        // match. The `:NNN` markers are this macOS build's log-site numbers
+        // from the probe; the matching needles are the message text, which the
+        // diff showed is what actually separates the variants.
         KindRule(
             process: "replayd",
-            messageContains: ["updateScreenCaptureDidStart"],
+            messageContains: ["hasStarted=1", "update screenAttribution complete"],
             kind: .screenCapture
         ),
         KindRule(
