@@ -38,7 +38,7 @@
 - **`PWCore`** (library — logic ทั้งหมด ไม่มี UI, เทสต์ได้ด้วย `swift test`)
   - `LogStreamReader` — spawn `/usr/bin/log stream --style ndjson` เป็น child process, อ่าน stdout ทีละบรรทัด, parse JSON, auto-restart แบบ exponential backoff (1s→2s→4s…สูงสุด 30s) เมื่อตาย
   - `ProcessWatch` — poll ทุก 3s: ไล่รายชื่อ process ทั้งระบบ (sysctl `KERN_PROC_ALL`) เทียบกับ watchlist
-  - `CameraWatch` — poll ทุก 2s: `AVCaptureDevice` ทุกตัว เช็ค `isInUseByAnotherApplication` (มีใน SDK macOS, verify แล้ว); off-debounce 5s
+  - (camera — log-based, R21) กล้องถูกจับผ่าน log สัญญาณ `<<<< AVCaptureSession >>>> startRunning`/`stopRunning` (subsystem `com.apple.cameracapture`) — actor = แอปที่ใช้กล้อง (processImagePath basename); วิธี poll `isInUseByAnotherApplication` ถูกยกเลิก (ไม่แม่นกับ built-in camera บน macOS 27)
   - `MicWatch` — poll ทุก 2s: input devices ทุกตัว เช็ค CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`; off-debounce 5s
   - `Classifier` — กติกาจัด tier (§5) → `ClassifiedEvent`
   - `Throttler` — dedup key `(kind, actor, tier)` ภายใน 60s รวมเป็น count
@@ -87,7 +87,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 | A | แคปจอ (ScreenCaptureKit/จุดม่วง) | log stream: subsystem `com.apple.ScreenCaptureKit`; process `replayd`; process `ScreenCaptureApprovalUI`; process `screencapture`/`screencaptureui`; process `tccd` + `kTCCServiceScreenCapture` | ดึงชื่อ client app จากบรรทัด log ถ้ามี; ไม่มี → "ไม่ทราบผู้แคป" |
 | B | Remote control สด | `ProcessWatch` เทียบ watchlist (ดู §7) + log stream ของ `screensharingd` | ชื่อ process + path (path ได้เฉพาะ process ของ user ตัวเอง — root-owned agents อาจเห็นแต่ชื่อ) |
 | C | องค์กร (labeling layer ไม่ใช่ sensor) | ทุก `RawEvent` เอา `actor` + `actorPath` ไป match `orgPatterns` (§7) | reason ระบุ pattern ที่ match |
-| D | กล้อง | `CameraWatch` | best-effort: จับคู่ log `cameracaptured`/`tccd` ±3s ถ้าดึงชื่อได้ |
+| D | กล้อง | log stream: subsystem `com.apple.cameracapture` + `startRunning`/`stopRunning` (R21) | actor = แอปที่เปิดกล้อง (processImagePath basename) — attribution ตรงจาก log |
 | E | ไมค์ | `MicWatch` | ไม่มี attribution — แจ้ง "ไมค์ถูกใช้" |
 
 **หมายเหตุความแม่นยำ (จะ validate ตอน implement):** สตริง log จริงของ ScreenCaptureKit/replayd บน macOS 26/27 ต้องทดสอบด้วยการกด ⌘⇧5 ระหว่าง stream (procedure §11) — ถ้าสัญญาณไหนไม่ยิงจริง มี fallback: `tccd` lines + `ProcessWatch` ของ `screencapture`
@@ -109,6 +109,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 - **ORG ห้าม mute เด็ดขาด:** ไม่มี config/action ใดระงับ ORG และ Pause ไม่กระทบ — ORG ถูกจัดกลุ่มโดย throttle (60s/actor) แต่ไม่เคยถูกปิด
 - **แบนเนอร์แดง ORG:** cooldown ต่อ actor 60s (`orgBannerCooldownSeconds`) — event ระหว่าง cooldown ยังได้ notification (จัดกลุ่ม) แต่ไม่เด้งแบนเนอร์ซ้ำ
 - **Pause:** ระงับเฉพาะ tier NORMAL — ORG/REMOTE ไม่ถูกระงับ
+- **off-events** (`cameraOff`, `micOff`) = **log-only** (ไม่แจ้งเตือน/ไม่เด้ง) — R20; เหตุการณ์ "การส่องจบลง" ไม่ใช่ observation ใหม่
 - ระดับการแจ้งเตือน:
 
 | Tier | Notification | เสียง | แบนเนอร์แดง | Evidence log |
@@ -275,7 +276,7 @@ nopeek/
 
 1. **Capture probe:** กด ⌘⇧5 ระหว่างแอปรัน → ต้องได้ notification NORMAL ≤5s + log event (⌘⇧5 = ใน systemNoise? **ไม่** — เป็น user action ปกติ แจ้ง NORMAL; ใครรำคาญก็ trust `screencaptureui` ได้)
 2. **Mission Control spam:** ใช้ Mission Control รัวๆ 10 ครั้ง → **0 notification**, มีแต่ log SYSTEM_NOISE
-3. **กล้อง:** เปิด Photo Booth → notification ≤5s; ปิด → ไม่มี spam
+3. **กล้อง:** `open -a "Photo Booth"` (หรือเปิดเอง) → notification ≤5s actor = Photo Booth; ปิดแบบ graceful (⌘Q) → `camera-off` ลง log, ไม่มี notification (R20); หมายเหตุ: `pkill` แบบ SIGTERM ไม่ trigger stopRunning
 4. **ไมค์:** อัด Voice Memos → notification ≤5s
 5. **Remote:** เปิด Screen Sharing ใน System Settings แล้วต่อ `vnc://localhost` จากเครื่องเดียวกัน → REMOTE + แบนเนอร์
 6. **ORG test:** ใส่ `"WindowManager"` ใน `orgPatterns` (test config) → ต้องได้ ORG + แบนเนอร์แดง + **mute ไม่ได้** (กติกา org มาก่อน systemNoise — เคสนี้พิสูจน์ลำดับ)
