@@ -13,6 +13,12 @@ let package = Package(
     targets: [
         .target(name: "PWCore"),
         .executableTarget(name: "NoPeekApp", dependencies: ["PWCore"]),
-        .testTarget(name: "PWCoreTests", dependencies: ["PWCore"]),
+        // The log-line fixtures travel with the tests so `swift test` can read
+        // them through `Bundle.module` from any working directory.
+        .testTarget(
+            name: "PWCoreTests",
+            dependencies: ["PWCore"],
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )

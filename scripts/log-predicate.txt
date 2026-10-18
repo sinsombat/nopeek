@@ -1,0 +1,1 @@
+subsystem == "com.apple.ScreenCaptureKit" OR process == "replayd" OR process == "ScreenCaptureApprovalUI" OR process == "screencapture" OR process == "screencaptureui" OR process == "screensharingd" OR (process == "tccd" AND composedMessage CONTAINS "ScreenCapture") OR process == "WindowManager"

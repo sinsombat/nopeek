@@ -2,3 +2,7 @@
 .swiftpm/
 build/
 .DS_Store
+
+# Raw capture probes (large, machine-specific); curated subsets live in
+# Tests/PWCoreTests/Fixtures/.
+/probe-*.ndjson
