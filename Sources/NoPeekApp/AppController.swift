@@ -14,22 +14,24 @@ import PWCore
 /// `Throttler(60 s)` → `Pipeline` → `LogStreamReader` (default ndjson command
 /// + default predicate) → `ProcessWatch` (T13: the remote-tier process table
 /// watch, whose watchlist closure reads `config` live) → `CameraWatch` (T14:
-/// the 2 s camera poll). The `Classifier` is a *snapshot*: T17 adds the config
-/// watcher and rebuilds it on change — live reload is not wired yet, and the
-/// `ConfigStore` is deliberately not started.
+/// the 2 s camera poll) → `MicWatch` (T15: the 2 s microphone poll). The
+/// `Classifier` is a *snapshot*: T17 adds the config watcher and rebuilds it on
+/// change — live reload is not wired yet, and the `ConfigStore` is deliberately
+/// not started.
 ///
 /// **Startup order** (`start()`): the `monitor-started` lifecycle line first,
 /// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
 /// whose polls run on the reader's serial queue, so `tick()` and
 /// `pipeline.handle(_:)` serialize with log lines) and the camera watch (T14:
-/// the same shape at 2 s). T21 wraps this with retention purge, the gap check
-/// and the heartbeat timer.
+/// the same shape at 2 s) and the mic watch (T15: same shape again, at 2 s).
+/// T21 wraps this with retention purge, the gap check and the heartbeat timer.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
-/// exactly that. The process watch (T13) and the camera watch (T14) deliver
-/// their polls on the same queue (`LogStreamReader.performSerialized`), so the
-/// pipeline has one owner. The sink therefore also runs on that queue:
+/// exactly that. The process watch (T13), the camera watch (T14) and the mic
+/// watch (T15) deliver their polls on the same queue
+/// (`LogStreamReader.performSerialized`), so the pipeline has one owner. The
+/// sink therefore also runs on that queue:
 /// `EvidenceLog` is driven by one owner, and the only state the main thread
 /// shares with it — the tray and the reader state — sits behind `uiLock`.
 /// Notifications are posted on the main actor.
@@ -98,6 +100,11 @@ final class AppController: @unchecked Sendable {
     /// (spec §3).
     private let cameraWatch: CameraWatch
 
+    /// The mic watch (T15, spec §4-E): one 2 s poll of the audio devices that
+    /// have input streams and are running. Reads device properties only — no
+    /// IO, no TCC request API (spec §3).
+    private let micWatch: MicWatch
+
     /// Fires the process-watch polls. The poll body itself is delivered on the
     /// reader's serial queue (see `startProcessWatch`); this queue only holds
     /// the timer, so a busy main thread never delays a poll.
@@ -109,6 +116,10 @@ final class AppController: @unchecked Sendable {
     /// process-watch queue above.
     private let cameraWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.camerawatch")
     private var cameraWatchTimer: DispatchSourceTimer?
+
+    /// Fires the mic-watch polls (T15); same division of labour again.
+    private let micWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.micwatch")
+    private var micWatchTimer: DispatchSourceTimer?
 
     // MARK: - Shared state
 
@@ -157,6 +168,10 @@ final class AppController: @unchecked Sendable {
         // The camera watch (T14): no config, no capture session — it reads
         // whether the system camera is in use and reports the on/off edges.
         self.cameraWatch = CameraWatch()
+
+        // The mic watch (T15): same shape for audio input — it reads whether an
+        // input device is running and reports the on/off edges.
+        self.micWatch = MicWatch()
     }
 
     // MARK: - Life cycle
@@ -175,6 +190,7 @@ final class AppController: @unchecked Sendable {
         reader.start()
         startProcessWatch()
         startCameraWatch()
+        startMicWatch()
     }
 
     /// Stops the reader and terminates its child, so quitting the app never
@@ -182,6 +198,7 @@ final class AppController: @unchecked Sendable {
     func stop() {
         stopProcessWatch()
         stopCameraWatch()
+        stopMicWatch()
         reader.stop()
     }
 
@@ -368,5 +385,49 @@ final class AppController: @unchecked Sendable {
     private func stopCameraWatch() {
         cameraWatchTimer?.cancel()
         cameraWatchTimer = nil
+    }
+
+    // MARK: - Mic watch (T15)
+
+    /// Arms the mic-watch timer (spec §3/§4-E). Idempotent.
+    ///
+    /// Same structure as the process and camera watches: the timer fires on its
+    /// own queue and hands each poll to the reader's serial queue, so
+    /// `MicWatch.tick()` and `Pipeline.handle(_:)` serialize with log lines and
+    /// with the other two watches' polls. The cadence comes from the watch
+    /// itself (`micWatch.interval`, pinned at 2 s) rather than a second
+    /// constant here, so the poller and its timer cannot drift apart.
+    ///
+    /// The first poll is immediate: a microphone already in use when NoPeek
+    /// starts is worth knowing about — that is exactly the state a user checks
+    /// for — and it is reported like any later one.
+    private func startMicWatch() {
+        guard micWatchTimer == nil else { return }
+
+        let reader = self.reader
+        let timer = DispatchSource.makeTimerSource(queue: micWatchQueue)
+        timer.schedule(deadline: .now(), repeating: micWatch.interval)
+        timer.setEventHandler { [weak self] in
+            reader.performSerialized { [weak self] in
+                guard let self else { return }
+                // `tick()` reads the system mic state and returns an event only
+                // on an edge: `micOn` the first time an input device is seen
+                // running, `micOff` once it has been down for longer than the
+                // 5 s debounce. From here on the event is routed exactly like a
+                // log-stream one (classify → log → notify / banner / tray);
+                // with actor "mic" it classifies NORMAL by default, which is
+                // the tier the user can mute.
+                guard let raw = self.micWatch.tick() else { return }
+                self.pipeline.handle(raw)
+            }
+        }
+        micWatchTimer = timer
+        timer.resume()
+    }
+
+    /// Cancels the mic polls; the same one-tick grace as `stopProcessWatch`.
+    private func stopMicWatch() {
+        micWatchTimer?.cancel()
+        micWatchTimer = nil
     }
 }
