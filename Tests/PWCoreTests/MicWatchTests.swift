@@ -5,7 +5,8 @@ import PWCore
 
 /// Tests for `MicWatch` (spec §4-E: "ไมค์ถูกใช้" — microphone in use).
 ///
-/// Mirror of `CameraWatchTests` for the audio side: every behavioural test
+/// The audio counterpart of the process watch's suite (`ProcessWatchTests`) in
+/// structure: every behavioural test
 /// drives the watch with a **hand-held microphone state** (the injected `inUse`
 /// closure) and a **hand-held clock** (the injected `now` closure), so the two
 /// things that decide the emissions — the on/off edge and the off-debounce —

@@ -48,8 +48,14 @@ public final class LogStreamReader: @unchecked Sendable {
     /// the shell also strips when `capture-probe.sh` reads it). The cross-check
     /// lives in `LogStreamReaderTests.testDefaultPredicateMatchesFile`; keep
     /// this string in sync with the file, never independently.
+    ///
+    /// The camera clauses are the field-test fix of plan T14: the built-in
+    /// camera's use is observable as `-[AVCaptureSession… startRunning]` /
+    /// `stopRunning` log lines under `com.apple.cameracapture`, emitted by the
+    /// capturing app's own process (see `KindRule.cameraDefaults`), while the
+    /// `AVCaptureDevice` in-use property the plan sketched never flipped.
     public static let defaultPredicate =
-        #"subsystem == "com.apple.ScreenCaptureKit" OR process == "replayd" OR process == "ScreenCaptureApprovalUI" OR process == "screencapture" OR process == "screencaptureui" OR process == "screensharingd" OR (process == "tccd" AND composedMessage CONTAINS "ScreenCapture") OR process == "WindowManager""#
+        #"subsystem == "com.apple.ScreenCaptureKit" OR process == "replayd" OR process == "ScreenCaptureApprovalUI" OR process == "screencapture" OR process == "screencaptureui" OR process == "screensharingd" OR (process == "tccd" AND composedMessage CONTAINS "ScreenCapture") OR process == "WindowManager" OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "startRunning") OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "stopRunning")"#
 
     /// The child the reader spawns by default: an ndjson log stream limited to
     /// the capture / remote-control / Mission-Control signals (spec §4).

@@ -11,18 +11,26 @@ import PWCore
 /// `Tests/PWCoreTests/Fixtures/probe-2026-10-18.ndjson` is the curated subset
 /// (the raw 2181-line / 2.2 MB probe stays out of the repo).
 ///
+/// `Tests/PWCoreTests/Fixtures/probe-camera-2026-10-18.ndjson` is the second
+/// curated subset, from the camera probe the T14 field-test fix was built on
+/// (Photo Booth preview / photo / video / close): the camera rules'
+/// start-stop signals and their chatter negatives.
+///
 /// The tests pin the two halves of spec §5's precision requirement:
 /// - **Capture truth signals parse.** `screencapture`'s ScreenCaptureKit
 ///   construction calls and the *capture-session* variants of replayd
 ///   (`:165 … hasStarted=1`, the `_block_invoke:186 … screenAttribution
-///   complete` lines) must produce events.
+///   complete` lines) must produce events; so must the camera session's own
+///   `startRunning`/`stopRunning` lines.
 /// - **Everything the probe showed to be ambient must not.** That includes
 ///   Mission Control's WindowManager chatter (except its one transition line,
 ///   spec §11-2), `screencaptureui`'s XPC / prefs traffic, **replayd's
 ///   `:161 client has entitlement to suppress screen indicator` echo** — which
 ///   a live Mission-Control-only probe showed to be the *only* replayd variant
-///   Mission Control produces (ruling R15) — and replayd's `hasStarted=0`
-///   stream-stop lines (kinds are frozen, nothing consumes a stop).
+///   Mission Control produces (ruling R15) — replayd's `hasStarted=0`
+///   stream-stop lines (kinds are frozen, nothing consumes a stop), and the
+///   camera subsystem's `AVCaptureSession` configuration /
+///   `AVControlCenterModules` chatter.
 ///
 /// Three fixture lines are hand-edited cases: a redacted `processImagePath`
 /// kept matchable through a synthetic `process` key (on the capture-session
@@ -33,17 +41,28 @@ import PWCore
 
     // MARK: - Helpers
 
-    /// Parser under test: the shipped default rules, nothing added.
-    private static let parser = LogLineParser(rules: KindRule.screenCaptureDefaults)
+    /// Parser under test: the shipped default rules (screen + camera), exactly
+    /// what `AppController` builds. Passing no rules is deliberate — a
+    /// regression that un-wires `KindRule.defaults` must fail here.
+    private static let parser = LogLineParser()
 
     private static func fixtureLines() throws -> [String] {
+        try fixtureLines(named: "probe-2026-10-18")
+    }
+
+    /// The camera probe's curated subset (see the suite documentation).
+    private static func fixtureCameraLines() throws -> [String] {
+        try fixtureLines(named: "probe-camera-2026-10-18")
+    }
+
+    private static func fixtureLines(named name: String) throws -> [String] {
         let url = try #require(
             Bundle.module.url(
-                forResource: "probe-2026-10-18",
+                forResource: name,
                 withExtension: "ndjson",
                 subdirectory: "Fixtures"
             ),
-            "fixture Fixtures/probe-2026-10-18.ndjson missing from the test bundle"
+            "fixture Fixtures/\(name).ndjson missing from the test bundle"
         )
         let text = try String(contentsOf: url, encoding: .utf8)
         return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
@@ -261,6 +280,92 @@ import PWCore
         let sharingEvent = try #require(Self.parser.parse(line: sharing))
         #expect(sharingEvent.kind == .remoteControlSession)
         #expect(sharingEvent.actor == "screensharingd")
+    }
+
+    // MARK: - Camera sessions (field-test fix, spec §4-D rework)
+
+    @Test func testShippedDefaultsWireBothSignalFamilies() {
+        // The camera rules are only useful if the shipped parser actually
+        // carries them: `AppController` constructs `LogLineParser()` with no
+        // rules, and a regression to `screenCaptureDefaults` alone would
+        // silently disable camera detection while every other test stayed
+        // green.
+        #expect(LogLineParser().rules == KindRule.defaults)
+        #expect(KindRule.defaults == KindRule.screenCaptureDefaults + KindRule.cameraDefaults)
+        #expect(KindRule.defaults.contains { $0.kind == .cameraOn })
+        #expect(KindRule.defaults.contains { $0.kind == .cameraOff })
+    }
+
+    @Test func testCameraStartRunningParsesToCameraOn() throws {
+        // The field test's replacement signal: the capturing app logs its own
+        // `-[AVCaptureSession_Tundra startRunning]` under
+        // com.apple.cameracapture (the plan's `AVCaptureDevice` in-use poll
+        // never flipped for the built-in camera). The actor is the capturing
+        // process — "Photo Booth" — so org/allowlist patterns match a real app
+        // rather than a synthetic "camera".
+        let starts = try Self.fixtureCameraLines().filter { $0.contains("startRunning]:") }
+        #expect(starts.count == 2, "expected the probe's two session starts")
+
+        for line in starts {
+            let event = try #require(Self.parser.parse(line: line), "start line did not parse")
+            #expect(event.kind == .cameraOn)
+            #expect(event.source == .logstream)
+            #expect(event.actor == "Photo Booth")
+            #expect(
+                event.actorPath
+                    == "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth"
+            )
+            #expect(event.pid == 13258)
+            #expect(event.rawSummary?.contains("AVCaptureSession_Tundra startRunning]") == true)
+            #expect((event.rawSummary ?? "").count <= LogLineParser.rawSummaryLimit)
+        }
+    }
+
+    @Test func testCameraStopRunningParsesToCameraOff() throws {
+        // Three stop lines, including the ~90 ms duplicate pair at the second
+        // session's close: two log lines are two observations — the Throttler
+        // folds the repeat into one notification (spec §5: throttling is
+        // grouping, not muting), the evidence log keeps both.
+        let stops = try Self.fixtureCameraLines().filter { $0.contains("stopRunning]:") }
+        #expect(stops.count == 3, "expected the probe's three session stops")
+
+        for line in stops {
+            let event = try #require(Self.parser.parse(line: line), "stop line did not parse")
+            #expect(event.kind == .cameraOff)
+            #expect(event.actor == "Photo Booth")
+            #expect(event.rawSummary?.contains("AVCaptureSession_Tundra stopRunning]") == true)
+        }
+    }
+
+    @Test func testCameraChatterStaysNil() throws {
+        // Precision is the whole point of the narrowed rule. The probe's other
+        // 539 com.apple.cameracapture lines are session configuration and
+        // AVControlCenterModules / AVCaptureDALDevice chatter; and the two
+        // CoreMediaIO backtrace lines *do* name the selectors while being the
+        // same session milliseconds later — if any of them counted as an
+        // event, one photo would notify half a dozen times.
+        let all = try Self.fixtureCameraLines()
+        #expect(all.count == 14, "the camera fixture drifted")
+
+        for needle in [
+            // Both backtraces *name the selectors* while being the same session
+            // milliseconds later — the subsystem anchor is what excludes them.
+            "CMIODeviceStartStream backtrace",
+            "CMIODeviceStopStream backtrace",
+            "beginConfiguration",
+            "commitConfiguration",
+            "_buildAndRunGraph",
+            "-[AVCaptureDeviceInput_Tundra observeValueForKeyPath",
+            "AVControlCenterModulesShouldBeShownForBundleID",
+            "AVControlCenterMicrophoneModuleShouldBeShownFor",
+            "+[AVCaptureDALDevice _defaultDeviceWithDeviceType",
+        ] {
+            let line = try #require(
+                all.first { $0.contains(needle) },
+                "camera fixture is missing the \(needle) negative"
+            )
+            #expect(Self.parser.parse(line: line) == nil, "camera chatter parsed: \(needle)")
+        }
     }
 
     // MARK: - Redaction

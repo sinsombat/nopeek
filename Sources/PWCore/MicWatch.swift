@@ -5,9 +5,10 @@ import Foundation
 
 /// Edge-triggered watch over the system microphone (spec §3/§4-E; plan T15).
 ///
-/// The exact sibling of `CameraWatch`: macOS has no log stream NoPeek can
-/// politely subscribe to for microphone use either, so this watch **polls a
-/// system property every 2 s** and reports the transitions:
+/// The camera can be watched through the log stream — the capturing app's own
+/// `AVCaptureSession` lifecycle lines (the T14 field-test fix) — but macOS
+/// emits no comparable line for microphone use, so this watch **polls a system
+/// property every 2 s** and reports the transitions:
 ///
 /// - `micOn` on the first tick that sees an input device running;
 /// - `micOff` on the first tick that sees it still down **more than
@@ -51,9 +52,10 @@ import Foundation
 /// never as a prompt. Measured on the development machine over 8 ticks at the
 /// full 2 s cadence: the same three preflights at the first tick and **zero**
 /// tccd traffic afterwards — no per-poll cost. It is the HAL's own behaviour for
-/// reading device state (the T14 report measured the same trio once AVFoundation
-/// enumerated devices, which touches the same HAL), not a request NoPeek makes;
-/// measured evidence and the decision live in the T15 report.
+/// reading device state (the T14 A/B measured the same trio when the
+/// since-removed `AVCaptureDevice` poll enumerated devices — AVFoundation
+/// touches the same HAL), not a request NoPeek makes; measured evidence and the
+/// decision live in the T15 report.
 ///
 /// **Attribution is deliberately absent in v1.** Spec §4-E asks for best-effort
 /// actor attribution by correlating the mic transition with log lines within
@@ -62,11 +64,11 @@ import Foundation
 /// there is no data to correlate against and the actor stays the literal `"mic"`
 /// (the T14 ruling, applied to T15; see the T15 report).
 ///
-/// **Threading.** Like `ProcessWatch`, `Throttler` and `CameraWatch` this class
-/// keeps state across ticks and is deliberately not thread-safe: one owner
-/// drives it. In the app that owner is the reader's serial callback queue (see
+/// **Threading.** Like `ProcessWatch` and `Throttler` this class keeps state
+/// across ticks and is deliberately not thread-safe: one owner drives it. In
+/// the app that owner is the reader's serial callback queue (see
 /// `LogStreamReader.performSerialized`), so the polls serialize with the log
-/// lines and the process/camera polls feeding the same `Pipeline`.
+/// lines and the process-watch polls feeding the same `Pipeline`.
 public final class MicWatch {
 
     // MARK: - System probe

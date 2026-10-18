@@ -13,8 +13,10 @@ import Foundation
 /// see `LogLineParserTests.testRulesWithoutProcessOrSubsystemNeverMatch`.
 ///
 /// The defaults were chosen against a real capture probe (2026-10-18,
-/// ⌘⇧5 screenshot toolbar + Mission Control, 2181 lines): precision first, so
-/// XPC/prefs chatter from `screencaptureui` produces no candidates.
+/// ⌘⇧5 screenshot toolbar + Mission Control, 2181 lines; the camera rules came
+/// later, from the T14 field-test fix and its own 3956-line probe — see
+/// `cameraDefaults`): precision first, so XPC/prefs chatter from
+/// `screencaptureui` produces no candidates.
 ///
 /// Mission Control is the deliberate exception (spec §11-2, ruling R14): its
 /// use must leave SYSTEM_NOISE lines in the evidence log, so one
@@ -144,6 +146,55 @@ extension KindRule {
             kind: .remoteControlSession
         ),
     ]
+
+    /// The camera rules (spec §4-D, reworked by the field test of plan T14).
+    ///
+    /// The plan's `AVCaptureDevice.isInUseByAnotherApplication` poll did not
+    /// survive contact with the real machine: Photo Booth's preview, photo and
+    /// video capture never flipped that property for the built-in camera, so
+    /// the poll was silent for the one thing it existed to catch (the mic poll,
+    /// which reads a property that *does* flip, is unaffected). What the camera
+    /// does emit reliably is the capture session's own lifecycle line — logged
+    /// by **the capturing app's process** under `com.apple.cameracapture`:
+    ///
+    ///     <<<< AVCaptureSession >>>>
+    ///         -[AVCaptureSession_Tundra startRunning]: (0x…) (pthread:0x…)
+    ///
+    /// A 3956-line probe (predicate = camera-ish processes/subsystems/messages,
+    /// recorded while Photo Booth previewed, took a photo, recorded and closed)
+    /// showed 544 `com.apple.cameracapture` lines of which **exactly 5** carry
+    /// `startRunning`/`stopRunning`: 2 session starts and 3 stops — every other
+    /// line is `AVControlCenterModules` / `AVCaptureDALDevice` / session
+    /// configuration chatter. The subsystem anchor is what makes the needles
+    /// safe: the only other lines in the probe that *mention* the selectors are
+    /// CoreMediaIO backtraces (`subsystem com.apple.cmio`, `CMIODeviceStartStream
+    /// backtrace … -[AVCaptureSession_Tundra startRunning] + 416`), and they are
+    /// deliberately **not** events — same session, milliseconds later, and noise
+    /// for anything counting sessions.
+    ///
+    /// Order inside this list: `startRunning` first, `stopRunning` second; the
+    /// two are disjoint by construction (one line carries exactly one selector).
+    /// `subsystem` alone is not a rule (`AVControlCenterModules` chatter would
+    /// match it), and neither is a needle without the anchor.
+    public static let cameraDefaults: [KindRule] = [
+        KindRule(
+            subsystem: "com.apple.cameracapture",
+            messageContains: ["startRunning"],
+            kind: .cameraOn
+        ),
+        KindRule(
+            subsystem: "com.apple.cameracapture",
+            messageContains: ["stopRunning"],
+            kind: .cameraOff
+        ),
+    ]
+
+    /// Every rule the parser ships with, in match order (first match wins).
+    ///
+    /// Split into the two family lists so a caller can reason about one signal
+    /// family at a time; `LogLineParser`'s default is this combined list, so
+    /// the shipped parser and the shipped predicate cover the same signals.
+    public static let defaults: [KindRule] = screenCaptureDefaults + cameraDefaults
 }
 
 // MARK: - LogLineParser
@@ -172,7 +223,7 @@ public struct LogLineParser: Sendable {
     /// Value the evidence log's `rawSummary` is truncated to (spec §8).
     public static let rawSummaryLimit = 200
 
-    public init(rules: [KindRule] = KindRule.screenCaptureDefaults) {
+    public init(rules: [KindRule] = KindRule.defaults) {
         self.rules = rules
     }
 
