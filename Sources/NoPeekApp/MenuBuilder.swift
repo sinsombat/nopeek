@@ -83,6 +83,16 @@ final class MenuBuilder {
             )
         )
 
+        // Spec §6: `System Checkup…` — the on-demand summary of this Mac's
+        // open observation channels (T19).
+        menu.addItem(
+            actionRow(
+                Strings.t("menu.checkup", language),
+                #selector(StatusItemController.runCheckup(_:)),
+                target
+            )
+        )
+
         menu.addItem(.separator())
 
         // Spec §6: `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`. The timed rows

@@ -221,6 +221,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.startCalibration()
     }
 
+    /// Spec §6 `System Checkup…`: a fresh snapshot in the checkup window.
+    @objc func runCheckup(_ sender: Any?) {
+        controller.runCheckup()
+    }
+
     @objc func pauseThirtyMinutes(_ sender: Any?) {
         controller.pause(for: 30 * 60)
         updateIcon()

@@ -123,6 +123,20 @@ import PWCore
             "calib.status.failed", "calib.status.timeout",
             "calib.summary.passed", "calib.summary.incomplete", "calib.saved",
             "calib.button.retry", "calib.button.close",
+            // T19's System Checkup window (four items, four service states,
+            // the two finding lines, the bounded-list tail, the severity
+            // labels, the pinned deep-link button + its two companions).
+            "checkup.title", "checkup.intro", "checkup.checking",
+            "checkup.generated", "checkup.summary.allOk", "checkup.summary.findings",
+            "checkup.item.screensharing", "checkup.item.remoteManagement",
+            "checkup.item.orgAgents", "checkup.item.listeners",
+            "checkup.detail.service.off", "checkup.detail.service.enabled",
+            "checkup.detail.service.listening", "checkup.detail.service.active",
+            "checkup.detail.orgAgents.none", "checkup.detail.orgAgents.found",
+            "checkup.detail.listeners.none", "checkup.detail.listeners.found",
+            "checkup.list.more",
+            "checkup.severity.ok", "checkup.severity.warn", "checkup.severity.attention",
+            "checkup.open", "checkup.button.rerun", "checkup.button.close",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")

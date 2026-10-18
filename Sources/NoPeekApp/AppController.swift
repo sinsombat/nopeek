@@ -96,6 +96,18 @@ final class AppController: @unchecked Sendable {
     /// `bannerPresenter` below, and the record URL is a static.
     @MainActor let calibrationWindow: CalibrationWindowController
 
+    // MARK: - System Checkup (T19, spec §6)
+
+    /// The on-demand checkup (spec §6 `System Checkup…`): read-only probes of
+    /// this Mac's open observation channels. The org patterns and the language
+    /// are read per run through the closures built below, so a config reload
+    /// changes the next checkup without rebuilding the service.
+    let checkup: CheckupService
+
+    /// The checkup window, built here — on the main thread, like everything the
+    /// window touches — while its window and views are only created by `show()`.
+    @MainActor let checkupWindow: CheckupWindowController
+
     /// The routing pipeline (T11). Built on first use — it captures `self` —
     /// from `start()` on the main thread, before any callback can touch it.
     private(set) lazy var pipeline: Pipeline = Pipeline(
@@ -237,11 +249,42 @@ final class AppController: @unchecked Sendable {
             recordURL: Self.defaultCalibrationURL
         )
 
+        // The System Checkup (T19, spec §6): the same shape — a service plus the
+        // window that draws it. The patterns, the process table and the language
+        // are read per run, so `Reload config` changes the next checkup; the
+        // language closure is shared by the window, which re-renders on refresh.
+        let language: @Sendable () -> Language = {
+            Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage
+        }
+        let checkup = CheckupService(
+            runner: LiveCommandRunner(),
+            orgPatterns: { configStore.config.effectiveOrgPatterns },
+            processLister: SystemProcesses.list,
+            language: language
+        )
+        self.checkup = checkup
+        self.checkupWindow = CheckupWindowController(checkup: checkup, language: language)
+
         // Wired last, when every stored property exists: the completion handler
         // is what persists the summary and records the `calibration-result`
         // lifecycle line.
         calibration.onComplete = { [weak self] summary in
             self?.calibrationDidComplete(summary)
+        }
+
+        // Also last, for the same reason: the checkup's `checkup-run` line
+        // (spec §8) goes through the lazy `reader` to the evidence log, and
+        // neither may be reached from a closure captured while an earlier stored
+        // property — `checkupWindow` above — was still unassigned. The window
+        // fires this for every started run, so `ตรวจใหม่` is recorded too, and
+        // the line is appended on the reader's serial queue, the log's single
+        // owner, exactly like `config-reloaded`.
+        checkupWindow.onRun = { [weak self] in
+            guard let self else { return }
+            let reader = self.reader
+            reader.performSerialized { [weak self] in
+                self?.evidenceLog.appendRaw(kind: .checkupRun)
+            }
         }
     }
 
@@ -417,6 +460,20 @@ final class AppController: @unchecked Sendable {
             try? self.calibration.persist(summary, to: Self.defaultCalibrationURL)
             self.evidenceLog.appendRaw(kind: .calibrationResult)
         }
+    }
+
+    // MARK: - System Checkup (T19, spec §6)
+
+    /// Runs the on-demand checkup and brings its window up (spec §6
+    /// `System Checkup…`).
+    ///
+    /// The window takes the snapshot itself, off the main thread, and fires
+    /// `onRun` for every started run — which is where the spec §8 lifecycle
+    /// line `checkup-run` is appended (see the window's construction). Main
+    /// thread only: the report is drawn by an AppKit window.
+    @MainActor
+    func runCheckup() {
+        checkupWindow.show()
     }
 
     // MARK: - Event funnel

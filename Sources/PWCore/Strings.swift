@@ -246,6 +246,90 @@ public enum Strings {
         "calib.button.retry": [.th: "ทำใหม่", .en: "Restart"],
         "calib.button.close": [.th: "ปิด", .en: "Close"],
 
+        // MARK: System Checkup (T19, spec §6)
+
+        // Window title; like the wizard's, `th` keeps the English jargon name
+        // it is opened by in the menu.
+        "checkup.title": [.th: "System Checkup", .en: "System Checkup"],
+        "checkup.intro": [
+            .th: "สรุปช่องทางที่เครื่องนี้เปิดรับการส่องอยู่ตอนนี้ — เป็นภาพ ณ เวลาที่ตรวจ",
+            .en: "The channels this Mac has open right now — a snapshot of the moment it ran",
+        ],
+        // The loading line, drawn while the probes run off the main thread.
+        "checkup.checking": [.th: "กำลังตรวจสอบ…", .en: "Checking…"],
+        "checkup.generated": [.th: "ตรวจเมื่อ %@", .en: "Checked %@"],
+        "checkup.summary.allOk": [
+            .th: "✅ ไม่พบช่องทางที่เปิดอยู่",
+            .en: "✅ No open channels found",
+        ],
+        "checkup.summary.findings": [
+            .th: "⚠️ พบ %@ รายการที่ควรดู",
+            .en: "⚠️ %@ item(s) need a look",
+        ],
+        // The four items, in check order.
+        "checkup.item.screensharing": [
+            .th: "แชร์หน้าจอ (Screen Sharing)",
+            .en: "Screen Sharing",
+        ],
+        "checkup.item.remoteManagement": [
+            .th: "Remote Management (ARD)",
+            .en: "Remote Management (ARD)",
+        ],
+        "checkup.item.orgAgents": [
+            .th: "agent ขององค์กรที่กำลังรัน",
+            .en: "Org agents running",
+        ],
+        "checkup.item.listeners": [
+            .th: "พอร์ตที่เปิดรับจากเครือข่าย",
+            .en: "Network listeners",
+        ],
+        // A sharing service's state. The first placeholder is the daemon's name
+        // (`screensharingd` / `ARDAgent`) and the second the pid list, so one
+        // line says what was found and on what evidence.
+        "checkup.detail.service.off": [
+            .th: "ปิดอยู่ — ไม่มี %@ และ service ไม่ได้โหลด",
+            .en: "off — no %@ and the service is not loaded",
+        ],
+        "checkup.detail.service.enabled": [
+            .th: "เปิดอยู่ — ยังไม่มีเซสชันที่ใช้งาน",
+            .en: "on — no active session yet",
+        ],
+        "checkup.detail.service.listening": [
+            .th: "เปิดรับอยู่ที่พอร์ต %@ — ยังไม่มีเซสชันที่ใช้งาน",
+            .en: "listening on port %@ — no active session yet",
+        ],
+        "checkup.detail.service.active": [
+            .th: "กำลังมีเซสชันใช้งานอยู่ (%@ pid %@)",
+            .en: "in use right now (%@ pid %@)",
+        ],
+        "checkup.detail.orgAgents.none": [
+            .th: "ไม่พบ agent ขององค์กรที่กำลังรัน",
+            .en: "no org agents are running",
+        ],
+        "checkup.detail.orgAgents.found": [
+            .th: "พบ %@ รายการ: %@",
+            .en: "%@ found: %@",
+        ],
+        "checkup.detail.listeners.none": [
+            .th: "ไม่มีพอร์ตที่เปิดรับจากเครื่องอื่น",
+            .en: "no ports are open to other machines",
+        ],
+        "checkup.detail.listeners.found": [
+            .th: "พบ %@ พอร์ต: %@",
+            .en: "%@ open ports: %@",
+        ],
+        // Tail of a bounded list, e.g. "…, 51653 และอีก 3 รายการ".
+        "checkup.list.more": [.th: "และอีก %@ รายการ", .en: "and %@ more"],
+        // Severity labels: colour is the fast read, the word is the one that
+        // survives VoiceOver and a monochrome screenshot.
+        "checkup.severity.ok": [.th: "✅ ปกติ", .en: "✅ ok"],
+        "checkup.severity.warn": [.th: "⚠️ ควรดู", .en: "⚠️ worth a look"],
+        "checkup.severity.attention": [.th: "🚨 ต้องดู", .en: "🚨 needs attention"],
+        // The pinned button copy (plan T19 step 5).
+        "checkup.open": [.th: "เปิด System Settings", .en: "Open System Settings"],
+        "checkup.button.rerun": [.th: "ตรวจใหม่", .en: "Run again"],
+        "checkup.button.close": [.th: "ปิด", .en: "Close"],
+
         // MARK: App
 
         "app.name": [.th: "NoPeek", .en: "NoPeek"],
