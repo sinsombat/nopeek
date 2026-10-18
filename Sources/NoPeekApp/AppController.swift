@@ -11,7 +11,9 @@ import PWCore
 /// **Construction** (`AppController.shared`, main thread):
 /// `ConfigStore(~/.config/nopeek/config.json)` → `EvidenceLog(~/Library/Logs/NoPeek)`
 /// → `Classifier` (built once from the config's effective lists) →
-/// `Throttler(60 s)` → `Pipeline` → `LogStreamReader` (default ndjson command
+/// `Throttler(60 s)` → `Pipeline` → `BannerPolicy` + `BannerPresenter` (T16: the
+/// red banner's per-actor cooldown and its non-activating panels) →
+/// `LogStreamReader` (default ndjson command
 /// + default predicate) → `ProcessWatch` (T13: the remote-tier process table
 /// watch, whose watchlist closure reads `config` live) → `MicWatch` (T15: the
 /// 2 s microphone poll). Camera detection needs no component of its own: the
@@ -33,9 +35,10 @@ import PWCore
 /// exactly that. The process watch (T13) and the mic watch (T15) deliver their
 /// polls on the same queue (`LogStreamReader.performSerialized`), so the
 /// pipeline has one owner. The sink therefore also runs on that queue:
-/// `EvidenceLog` is driven by one owner, and the only state the main thread
+/// `EvidenceLog` is driven by one owner, `BannerPolicy.shouldShow` keeps its
+/// per-actor cooldown ordered there too, and the only state the main thread
 /// shares with it — the tray and the reader state — sits behind `uiLock`.
-/// Notifications are posted on the main actor.
+/// Notifications and banners are then posted on the main actor.
 final class AppController: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -105,6 +108,16 @@ final class AppController: @unchecked Sendable {
     /// IO, no TCC request API (spec §3).
     private let micWatch: MicWatch
 
+    /// The red banner's per-actor cooldown (T16, spec §5). Built once from the
+    /// config `init` loaded, like the `Classifier` snapshot: T17's live reload
+    /// rebuilds it when `orgBannerCooldownSeconds` changes.
+    private let bannerPolicy: BannerPolicy
+
+    /// The red banner itself (T16, spec §6): a non-activating panel per screen.
+    /// Reads `bannerLevel` live on every show, so a reload changes the next
+    /// banner without rebuilding this.
+    private let bannerPresenter: BannerPresenter
+
     /// Fires the process-watch polls. The poll body itself is delivered on the
     /// reader's serial queue (see `startProcessWatch`); this queue only holds
     /// the timer, so a busy main thread never delays a poll.
@@ -165,6 +178,19 @@ final class AppController: @unchecked Sendable {
         // (T15) reads whether an input device is running and reports the
         // on/off edges.
         self.micWatch = MicWatch()
+
+        // The banner gate (T16, spec §5): `Pipeline` emits `.banner` for every
+        // eligible event; this policy decides whether one shows, per actor.
+        self.bannerPolicy = BannerPolicy(
+            cooldown: TimeInterval(configStore.config.orgBannerCooldownSeconds)
+        )
+
+        // `bannerLevel` is read live per show (spec §7), so it reads the local
+        // store rather than capturing `self`.
+        self.bannerPresenter = BannerPresenter(
+            windowLevel: { BannerPresenter.windowLevel(forBannerLevel: configStore.config.bannerLevel) },
+            logDirectoryURL: Self.defaultLogDirectory
+        )
     }
 
     // MARK: - Life cycle
@@ -218,11 +244,14 @@ final class AppController: @unchecked Sendable {
         case .notify(let event):
             postNotification(for: event)
 
-        case .banner:
-            // T16 owns this: `BannerPolicy` (per-actor 60 s cooldown) plus
-            // `BannerPresenter`. Until then no banner is shown — an ORG banner
-            // without its cooldown would repeat on every event of a burst.
-            break
+        case .banner(let event):
+            // T16: the policy owns the per-actor cooldown (spec §5). A
+            // suppressed repeat is silent *here only* — `.appendLog`, the
+            // notification path and `.trayUpdate` above/below already ran and
+            // are never affected. The decision happens on this serial queue,
+            // so cooldown ordering is emission ordering.
+            guard bannerPolicy.shouldShow(event) else { break }
+            presentBanner(for: event)
 
         case .trayUpdate(let event):
             uiLock.withLock { tray.record(event) }
@@ -250,6 +279,24 @@ final class AppController: @unchecked Sendable {
                 title: copy.title,
                 body: copy.body,
                 threadID: NotificationService.threadID(for: tier)
+            )
+        }
+    }
+
+    /// Puts the red banner on screen (T16, spec §6). Same hop as
+    /// `postNotification`: `BannerPresenter` is AppKit and main-actor-isolated,
+    /// while `perform` runs on the reader's serial queue — the policy decision
+    /// itself already happened there, synchronously, in emission order.
+    private func presentBanner(for event: ClassifiedEvent) {
+        let language = Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage
+        let presenter = bannerPresenter
+
+        Task { @MainActor in
+            presenter.show(
+                tier: event.tier,
+                actor: event.event.actor,
+                kind: event.event.kind.rawValue,
+                lang: language
             )
         }
     }

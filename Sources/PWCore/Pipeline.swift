@@ -21,7 +21,9 @@ import Foundation
 /// 4. `.trayUpdate` — menu-bar icon / "last 10 events" state (spec §6), for
 ///    every non-noise tier, pause or no pause.
 ///
-/// `SYSTEM_NOISE` and `ALLOWLIST` stop after step 1.
+/// `SYSTEM_NOISE` and `ALLOWLIST` stop after step 1, and the R20 off-events
+/// (`cameraOff` / `micOff`, spec §5) stop after step 1 + step 4: logged and
+/// fed to the tray, never notified and never bannered.
 public enum Action: Equatable, Sendable {
     case appendLog(ClassifiedEvent)
     case notify(ClassifiedEvent)
@@ -43,6 +45,14 @@ public enum Action: Equatable, Sendable {
 /// | REMOTE | ✅ | ✅ (throttled) | ✅ per `remoteBannerEnabled()` | ✅ |
 /// | NORMAL | ✅ | ✅ unless paused (throttled) | ❌ | ✅ always |
 /// | SYSTEM_NOISE / ALLOWLIST | ✅ | ❌ | ❌ | ❌ |
+/// | cameraOff / micOff (any tier) | ✅ | ❌ | ❌ | ✅ |
+///
+/// **Off-events are log-only** (R20, spec §5): `cameraOff` and `micOff` close an
+/// observation rather than report a new one, so whatever tier their actor
+/// classifies to they stop after `.appendLog` + `.trayUpdate` — no
+/// notification, no banner, and no visit to the Throttler (there is nothing to
+/// group). The gate sits before the tier switch so pause never changes the
+/// outcome either.
 ///
 /// **Notifications are throttled, banners are not.** The notification path is
 /// the only one that touches the `Throttler`: `Decision.notify(e)` becomes
@@ -133,6 +143,9 @@ public final class Pipeline: @unchecked Sendable {
     /// Routes one raw event through classification, the evidence log and —
     /// per tier — the throttled notification, banner and tray paths.
     ///
+    /// An R20 off-event (`cameraOff` / `micOff`) stops after the log line and
+    /// the tray update, whatever its tier.
+    ///
     /// Must be called from one serial queue (the Throttler contract); see the
     /// class documentation.
     public func handle(_ raw: RawEvent) {
@@ -141,6 +154,17 @@ public final class Pipeline: @unchecked Sendable {
         // Rule 1: the evidence line is unconditional and first — before any
         // suppression, for every tier.
         sink(.appendLog(event))
+
+        // Rule 2 (R20, spec §5): the off-events close an observation instead
+        // of reporting a new one, so they are log-only — the tray list still
+        // gets them (the menu's "recent events" is a record, not an alert),
+        // but no notification and no banner, whatever tier the actor
+        // classifies to. Gating before the tier switch keeps pause out of it
+        // too: an off-event behaves identically paused or not.
+        if event.event.kind == .cameraOff || event.event.kind == .micOff {
+            sink(.trayUpdate(event))
+            return
+        }
 
         switch event.tier {
         case .org:

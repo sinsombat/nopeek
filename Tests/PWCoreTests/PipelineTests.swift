@@ -175,6 +175,36 @@ import PWCore
         }
     }
 
+    // MARK: - Off-events are log-only (R20)
+
+    @Test func testOffEventsAreLogOnly() {
+        // Spec §5 (R20): `cameraOff` / `micOff` mark the *end* of an
+        // observation, not a new one. They are logged and fed to the tray —
+        // and that is all: no `.notify`/`.aggregated` (so they never touch the
+        // Throttler either) and no `.banner`. Pause is irrelevant to them, so
+        // both pause states must produce the identical list: the gate sits
+        // before the tier routing, not inside the NORMAL branch.
+        let (pipeline, classifier, recorder, _) = makePipeline()
+
+        let cases: [(actor: String, kind: EventKind, source: EventSource)] = [
+            ("Photo Booth", .cameraOff, .logstream), // camera stopRunning line (T14)
+            ("mic", .micOff, .mic),                 // mic-poll off edge (T15)
+        ]
+
+        for paused in [false, true] {
+            pipeline.setPaused(paused)
+            for testCase in cases {
+                recorder.reset()
+                let rawEvent = raw(actor: testCase.actor, kind: testCase.kind, source: testCase.source)
+                pipeline.handle(rawEvent)
+
+                let expected = classifier.classify(rawEvent)
+                #expect(expected.tier == .normal)
+                #expect(recorder.actions == [.appendLog(expected), .trayUpdate(expected)])
+            }
+        }
+    }
+
     // MARK: - REMOTE banner follows the live config closure
 
     @Test func testRemoteBannerRespectsConfig() {
