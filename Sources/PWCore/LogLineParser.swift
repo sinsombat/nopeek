@@ -14,8 +14,19 @@ import Foundation
 ///
 /// The defaults were chosen against a real capture probe (2026-10-18,
 /// ⌘⇧5 screenshot toolbar + Mission Control, 2181 lines): precision first, so
-/// XPC/prefs chatter from `screencaptureui` and Mission Control window
-/// bookkeeping from `WindowManager` produce no candidates.
+/// XPC/prefs chatter from `screencaptureui` produces no candidates.
+///
+/// Mission Control is the deliberate exception (spec §11-2, ruling R14): its
+/// use must leave SYSTEM_NOISE lines in the evidence log, so one
+/// WindowManager rule ships. The probe's 1273 WindowManager lines are ~99%
+/// XPC / connection / window-bookkeeping chatter (880 of them
+/// `minimumDockRevealAmountDidChange` alone), so the rule is narrowed to the
+/// one signature that marks a Mission Control transition: the `app`-category
+/// "Change expose mode …" line — exactly one line per enter/exit (gesture,
+/// hotKey and clientToggle paths alike), and the only WindowManager message
+/// that is not `<private>`-redacted, so the direction it carries is readable
+/// in the evidence line. Everything else WindowManager logs stays a
+/// non-candidate.
 public struct KindRule: Equatable, Sendable {
     /// `process`-style name: the ndjson `process` key when present, otherwise
     /// the basename of `processImagePath` (real `log stream` output has no
@@ -69,6 +80,11 @@ extension KindRule {
     ///   `processImagePath`, which is how a non-Apple recorder shows up.
     /// - Any process logging under the `com.apple.ScreenCaptureKit` subsystem
     ///   is a capture participant regardless of its name.
+    /// - `WindowManager`'s "Change expose mode …" line is Mission Control's
+    ///   signal (spec §11-2): the WM's on-screen indicator moment. It carries
+    ///   kind `.screenCapture` like the other capture signals; the classifier's
+    ///   noise list (`WindowManager`, spec §7) turns it into SYSTEM_NOISE, so
+    ///   it is logged and never notified.
     /// - `screensharingd` is the remote-control signal (spec §4/§5). The
     ///   `ScreenCaptureApprovalUI` rule is kept for macOS versions that host
     ///   the approval prompt in its own process (absent from the probe).
@@ -90,6 +106,18 @@ extension KindRule {
         ),
         KindRule(
             subsystem: "com.apple.ScreenCaptureKit",
+            kind: .screenCapture
+        ),
+        // Mission Control (spec §11-2 / ruling R14). The probe evidence for
+        // this needle: 12 matching lines out of 1273 WindowManager lines
+        // (0.94%), one per expose-mode enter/exit, message not redacted
+        // ("Change expose mode off -> missionControl: gesture(…)",
+        // "… missionControl -> off: clientToggle(…)"). Its XPC neighbours
+        // (`AdminXPCListener exposeModeDidChange:`, `Windowing mode: …`,
+        // `minimumDockRevealAmountDidChange`) stay non-candidates on purpose.
+        KindRule(
+            process: "WindowManager",
+            messageContains: ["Change expose mode"],
             kind: .screenCapture
         ),
         KindRule(

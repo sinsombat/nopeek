@@ -18,9 +18,11 @@ import PWCore
 ///
 /// The tests pin the two halves of spec §5's precision requirement: real
 /// capture truth signals (`replayd`'s `updateScreenCaptureDidStart` and the
-/// ScreenCaptureKit construction calls) must parse, while Mission Control /
-/// XPC chatter must return `nil` so it never reaches the Classifier as a
-/// candidate.
+/// ScreenCaptureKit construction calls) must parse, and so must Mission
+/// Control's one readable WindowManager transition line (spec §11-2: explore
+/// noise lands in the evidence log, as SYSTEM_NOISE). Everything around it —
+/// WindowManager's XPC / connection / window-bookkeeping chatter — must still
+/// return `nil` so it never reaches the Classifier as a candidate.
 @Suite struct LogLineParserTests {
 
     // MARK: - Helpers
@@ -160,6 +162,46 @@ import PWCore
         #expect(event.actorPath == "/Applications/OtherRecorder.app/Contents/MacOS/OtherRecorder")
     }
 
+    @Test func testParsesMissionControlTransitionLines() throws {
+        // Ruling R14 / spec §11-2: Mission Control must leave SYSTEM_NOISE
+        // lines in the evidence log. WindowManager's `app`-category
+        // "Change expose mode …" line is the one WindowManager message that is
+        // (a) emitted once per Mission Control enter/exit — gesture and
+        // hotKey/clientToggle alike, per the raw probe — and (b) not redacted,
+        // so the direction is readable in the event.
+        for needle in [
+            "Change expose mode off -> missionControl",
+            "Change expose mode missionControl -> off",
+        ] {
+            let line = try Self.fixtureLine(containing: [needle])
+            let event = try #require(Self.parser.parse(line: line), "no event for \(needle)")
+            #expect(event.kind == .screenCapture)
+            #expect(event.source == .logstream)
+            #expect(event.actor == "WindowManager")
+            #expect(
+                event.actorPath
+                    == "/System/Library/CoreServices/WindowManager.app/Contents/MacOS/WindowManager"
+            )
+            #expect(event.pid == 1261)
+            #expect(event.rawSummary?.contains(needle) == true)
+        }
+    }
+
+    @Test func testWindowManagerChatterStaysNil() throws {
+        // The narrowness of the WM rule is the point: the probe's WindowManager
+        // chatter (≈1270 lines) is XPC bookkeeping and private-value state
+        // mirrors that carry no readable capture signal, so only the
+        // "Change expose mode" line parses.
+        for needle in [
+            "minimumDockRevealAmountDidChange",
+            "AdminXPCListener exposeModeDidChange",
+            "Windowing mode: <private>",
+        ] {
+            let line = try Self.fixtureLine(containing: [needle])
+            #expect(Self.parser.parse(line: line) == nil, "WM chatter parsed: \(needle)")
+        }
+    }
+
     @Test func testApprovalAndRemoteControlRules() throws {
         let approval = try Self.syntheticLine(
             processImagePath: "/System/Library/CoreServices/ScreenCaptureApprovalUI.app/Contents/MacOS/ScreenCaptureApprovalUI",
@@ -239,10 +281,13 @@ import PWCore
     // MARK: - Precision: non-candidates stay nil
 
     @Test func testNonCandidateReturnsNil() throws {
-        // WindowManager = Mission Control thumbnails: the system-noise signal,
-        // classified later, never a .screenCapture candidate from parsing.
-        let missionControl = try Self.fixtureLine(containing: ["Change expose mode missionControl"])
-        #expect(Self.parser.parse(line: missionControl) == nil)
+        // Raw probe lines around the Mission Control transition that the WM
+        // rule deliberately does not match (its XPC neighbours).
+        let dockReveal = try Self.fixtureLine(containing: ["minimumDockRevealAmountDidChange"])
+        #expect(Self.parser.parse(line: dockReveal) == nil)
+
+        let exposeModeXPC = try Self.fixtureLine(containing: ["AdminXPCListener exposeModeDidChange"])
+        #expect(Self.parser.parse(line: exposeModeXPC) == nil)
 
         let modelWindowOrder = try Self.fixtureLine(containing: ["Model window order changed"])
         #expect(Self.parser.parse(line: modelWindowOrder) == nil)
@@ -273,15 +318,22 @@ import PWCore
     // MARK: - Custom rules
 
     @Test func testCustomRulesReplaceDefaults() throws {
-        let line = try Self.fixtureLine(containing: ["Change expose mode missionControl"])
-        #expect(Self.parser.parse(line: line) == nil)
+        // A custom rule set replaces the shipped one: the defaults no longer
+        // apply, so a line the defaults ignore (general window bookkeeping)
+        // parses, while the Mission Control line the defaults do parse stays
+        // `nil` here.
+        let bookkeeping = try Self.fixtureLine(containing: ["Model window order changed"])
+        #expect(Self.parser.parse(line: bookkeeping) == nil)
 
         let custom = LogLineParser(rules: [
-            KindRule(process: "WindowManager", messageContains: ["Change expose mode missionControl"], kind: .screenCapture)
+            KindRule(process: "WindowManager", messageContains: ["Model window order"], kind: .screenCapture)
         ])
-        let event = try #require(custom.parse(line: line))
+        let event = try #require(custom.parse(line: bookkeeping))
         #expect(event.kind == .screenCapture)
         #expect(event.actor == "WindowManager")
+
+        let missionControl = try Self.fixtureLine(containing: ["Change expose mode missionControl"])
+        #expect(custom.parse(line: missionControl) == nil)
     }
 
     // MARK: - Whole-fixture tolerance
@@ -301,7 +353,8 @@ import PWCore
         }
 
         // 11 real replayd lines + 1 redacted replayd + 1 redacted
-        // ScreenCaptureKit line + 5 screencapture SC-construction lines.
-        #expect(parsed == 18)
+        // ScreenCaptureKit line + 5 screencapture SC-construction lines
+        // + 2 Mission Control transition lines (spec §11-2 / ruling R14).
+        #expect(parsed == 20)
     }
 }

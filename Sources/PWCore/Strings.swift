@@ -9,6 +9,23 @@ public enum Language: String, Codable, CaseIterable, Equatable, Sendable {
     case en
 }
 
+// MARK: - NotificationCopy
+
+/// Title + body for one event's notification (spec §6).
+///
+/// The grouping thread id is *not* here: it lives with `NotificationService`
+/// (R10, `nopeek-<tier>`), so each piece of a notification has exactly one
+/// source.
+public struct NotificationCopy: Equatable, Sendable {
+    public let title: String
+    public let body: String
+
+    public init(title: String, body: String) {
+        self.title = title
+        self.body = body
+    }
+}
+
 // MARK: - Strings
 
 /// The in-code string table (spec §10: every user-visible string — menu,
@@ -45,6 +62,41 @@ public enum Strings {
     /// Every key in the table, regardless of language.
     public static var allKeys: Set<String> {
         Set(table.keys)
+    }
+
+    // MARK: - Notification copy for a classified event
+
+    /// Title + body for one classified event's notification (spec §6): the
+    /// per-tier copy with `<actor> — <kind>` substituted, in `lang`.
+    ///
+    /// `nil` for the tiers that never notify — `SYSTEM_NOISE` and `ALLOWLIST`
+    /// are logged and nothing else (spec §5) — so a sink that goes through this
+    /// function cannot post copy that does not exist.
+    public static func notificationCopy(
+        for event: ClassifiedEvent,
+        language: Language = Strings.defaultLanguage
+    ) -> NotificationCopy? {
+        guard let name = tierName(for: event.tier) else { return nil }
+        return NotificationCopy(
+            title: t("notif.\(name).title", language),
+            body: String(
+                format: t("notif.\(name).body", language),
+                event.event.actor,
+                event.event.kind.rawValue
+            )
+        )
+    }
+
+    /// The `notif.<name>.*` key segment per notifying tier: `org` / `remote` /
+    /// `normal`. (`Tier.rawValue.lowercased()` would give the same strings for
+    /// these three — this switch keeps the mapping explicit and total.)
+    private static func tierName(for tier: Tier) -> String? {
+        switch tier {
+        case .org: "org"
+        case .remote: "remote"
+        case .normal: "normal"
+        case .systemNoise, .allowlist: nil
+        }
     }
 
     /// The table. Both languages must be present for every key.

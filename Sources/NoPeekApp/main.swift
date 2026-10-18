@@ -2,16 +2,16 @@ import AppKit
 
 import PWCore
 
-// NoPeek — menu-bar app bootstrap (M0 skeleton).
+// NoPeek — menu-bar app bootstrap (M0 skeleton, wired in T12).
 //
 // This file is the process entry point only. It keeps the process out of App
-// Nap, puts the shield in the menu bar and offers `Test alert` + Quit. Later
-// tasks grow on it: T12 wires the watchers via `AppController`, T17 replaces
-// the throwaway menu with the real one.
+// Nap, puts the shield in the menu bar and offers `Test alert` + Quit; the
+// detection chain itself lives in `AppController` (T12), which later tasks
+// (T13–T21) grow.
 //
-// Spec references: §6 (alert UX, notification permission), §9 (LSUIElement, no
-// Dock icon), §10 (TH default, all copy through `Strings`), §12 (App Nap
-// mitigation).
+// Spec references: §3 (architecture), §6 (alert UX, notification permission),
+// §9 (LSUIElement, no Dock icon), §10 (TH default, all copy through `Strings`),
+// §12 (App Nap mitigation).
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -19,9 +19,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var activity: NSObjectProtocol?
     private var statusItem: NSStatusItem?
 
+    /// The detection chain: config → evidence log → classifier → throttler →
+    /// pipeline → log stream (T12). Same instance the whole app uses, so there
+    /// is exactly one `UNUserNotificationCenter` delegate.
+    private let controller = AppController.shared
+
     /// Notification delivery (spec §6). Notification permission is the only
     /// permission this app ever requests.
-    private let notifications = NotificationService()
+    private var notifications: NotificationService { controller.notifications }
 
     /// Spec §6 warning row: shown only while notification access is denied.
     private var notificationWarningItem: NSMenuItem?
@@ -42,9 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await notifications.requestPermission()
             updateNotificationWarning()
         }
+
+        // Spec §3: record the boot (`monitor-started`) and start watching.
+        controller.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Terminates the `log stream` child so no orphan outlives the app.
+        controller.stop()
         if let activity {
             ProcessInfo.processInfo.endActivity(activity)
         }

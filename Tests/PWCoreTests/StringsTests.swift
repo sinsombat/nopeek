@@ -142,4 +142,87 @@ import PWCore
         #expect(Language.en.rawValue == "en")
         #expect(Set(Language.allCases) == Set([Language.th, Language.en]))
     }
+
+    // MARK: - Notification copy for a classified event (T12 sink mapping)
+
+    private func classified(
+        tier: Tier,
+        actor: String,
+        kind: EventKind = .screenCapture,
+        reason: String = "default"
+    ) -> ClassifiedEvent {
+        ClassifiedEvent(
+            event: RawEvent(
+                ts: Date(timeIntervalSince1970: 1_762_000_000),
+                source: .logstream,
+                kind: kind,
+                actor: actor
+            ),
+            tier: tier,
+            reason: reason
+        )
+    }
+
+    @Test func testNotificationCopyPerNotifyingTier() throws {
+        let normal = try #require(
+            Strings.notificationCopy(
+                for: classified(tier: .normal, actor: "screencaptureui"),
+                language: .th
+            )
+        )
+        #expect(normal.title == Strings.t("notif.normal.title", .th))
+        #expect(normal.body == "screencaptureui — screen-capture")
+
+        let org = try #require(
+            Strings.notificationCopy(
+                for: classified(tier: .org, actor: "Tanium", reason: "orgPattern:Tanium"),
+                language: .th
+            )
+        )
+        #expect(org.title == Strings.t("notif.org.title", .th))
+        #expect(org.body == "Tanium — screen-capture")
+
+        let remote = try #require(
+            Strings.notificationCopy(
+                for: classified(tier: .remote, actor: "screensharingd", reason: "remote-control"),
+                language: .th
+            )
+        )
+        #expect(remote.title == Strings.t("notif.remote.title", .th))
+        #expect(remote.body == "screensharingd — screen-capture")
+    }
+
+    @Test func testNotificationCopyFollowsTheLanguage() throws {
+        let event = classified(tier: .normal, actor: "replayd")
+
+        let en = try #require(Strings.notificationCopy(for: event, language: .en))
+        #expect(en.title == Strings.t("notif.normal.title", .en))
+        #expect(en.title == "🔔 Activity detected")
+        #expect(en.body == "replayd — screen-capture")
+
+        // The default is the spec §10 TH default.
+        let fallback = try #require(Strings.notificationCopy(for: event))
+        #expect(fallback == Strings.notificationCopy(for: event, language: .th))
+    }
+
+    @Test func testNotificationCopyCarriesTheEventKindSpelling() throws {
+        // R5: the kind raw values are frozen; the body must show them verbatim.
+        for kind in [EventKind.screenCapture, .cameraOn, .micOn, .remoteControlSession] {
+            let copy = try #require(
+                Strings.notificationCopy(for: classified(tier: .normal, actor: "some-app", kind: kind))
+            )
+            #expect(copy.body == "some-app — \(kind.rawValue)")
+        }
+    }
+
+    @Test func testNotificationCopyIsNilForNonNotifyingTiers() {
+        // SYSTEM_NOISE and ALLOWLIST are logged, never notified (spec §5):
+        // there is no copy for them, so a sink cannot post one by accident.
+        for tier in [Tier.systemNoise, .allowlist] {
+            #expect(
+                Strings.notificationCopy(for: classified(tier: tier, actor: "WindowManager")) == nil,
+                "unexpected copy for \(tier.rawValue)"
+            )
+        }
+    }
 }
