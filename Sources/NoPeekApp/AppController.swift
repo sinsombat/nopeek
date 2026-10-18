@@ -13,24 +13,26 @@ import PWCore
 /// → `Classifier` (built once from the config's effective lists) →
 /// `Throttler(60 s)` → `Pipeline` → `LogStreamReader` (default ndjson command
 /// + default predicate) → `ProcessWatch` (T13: the remote-tier process table
-/// watch, whose watchlist closure reads `config` live). The `Classifier` is a
-/// *snapshot*: T17 adds the config watcher and rebuilds it on change — live
-/// reload is not wired yet, and the `ConfigStore` is deliberately not started.
+/// watch, whose watchlist closure reads `config` live) → `CameraWatch` (T14:
+/// the 2 s camera poll). The `Classifier` is a *snapshot*: T17 adds the config
+/// watcher and rebuilds it on change — live reload is not wired yet, and the
+/// `ConfigStore` is deliberately not started.
 ///
 /// **Startup order** (`start()`): the `monitor-started` lifecycle line first,
 /// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
 /// whose polls run on the reader's serial queue, so `tick()` and
-/// `pipeline.handle(_:)` serialize with log lines). T21 wraps this with
-/// retention purge, the gap check and the heartbeat timer.
+/// `pipeline.handle(_:)` serialize with log lines) and the camera watch (T14:
+/// the same shape at 2 s). T21 wraps this with retention purge, the gap check
+/// and the heartbeat timer.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
-/// exactly that. The process watch (T13) delivers its polls on the same queue
-/// (`LogStreamReader.performSerialized`), so the pipeline has one owner. The
-/// sink therefore also runs on that queue: `EvidenceLog` is driven by one
-/// owner, and the only state the main thread shares with it — the tray and the
-/// reader state — sits behind `uiLock`. Notifications are posted on the main
-/// actor.
+/// exactly that. The process watch (T13) and the camera watch (T14) deliver
+/// their polls on the same queue (`LogStreamReader.performSerialized`), so the
+/// pipeline has one owner. The sink therefore also runs on that queue:
+/// `EvidenceLog` is driven by one owner, and the only state the main thread
+/// shares with it — the tray and the reader state — sits behind `uiLock`.
+/// Notifications are posted on the main actor.
 final class AppController: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -91,12 +93,22 @@ final class AppController: @unchecked Sendable {
     /// process table against the config's remote-control watchlist.
     private let processWatch: ProcessWatch
 
+    /// The camera watch (T14, spec §4-D): one 2 s poll of the system camera
+    /// state. Reads a device property only — no capture session, no TCC prompt
+    /// (spec §3).
+    private let cameraWatch: CameraWatch
+
     /// Fires the process-watch polls. The poll body itself is delivered on the
     /// reader's serial queue (see `startProcessWatch`); this queue only holds
     /// the timer, so a busy main thread never delays a poll.
     private let processWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.processwatch")
     /// Armed by `start()`, cancelled by `stop()`.
     private var processWatchTimer: DispatchSourceTimer?
+
+    /// Fires the camera-watch polls (T14); same division of labour as the
+    /// process-watch queue above.
+    private let cameraWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.camerawatch")
+    private var cameraWatchTimer: DispatchSourceTimer?
 
     // MARK: - Shared state
 
@@ -141,6 +153,10 @@ final class AppController: @unchecked Sendable {
         self.processWatch = ProcessWatch(
             names: { configStore.config.effectiveRemoteControl }
         )
+
+        // The camera watch (T14): no config, no capture session — it reads
+        // whether the system camera is in use and reports the on/off edges.
+        self.cameraWatch = CameraWatch()
     }
 
     // MARK: - Life cycle
@@ -158,12 +174,14 @@ final class AppController: @unchecked Sendable {
         evidenceLog.appendRaw(kind: .monitorStarted)
         reader.start()
         startProcessWatch()
+        startCameraWatch()
     }
 
     /// Stops the reader and terminates its child, so quitting the app never
     /// leaves an orphaned `log stream` behind. Safe to call when not started.
     func stop() {
         stopProcessWatch()
+        stopCameraWatch()
         reader.stop()
     }
 
@@ -306,5 +324,49 @@ final class AppController: @unchecked Sendable {
     private func stopProcessWatch() {
         processWatchTimer?.cancel()
         processWatchTimer = nil
+    }
+
+    // MARK: - Camera watch (T14)
+
+    /// Arms the camera-watch timer (spec §3/§4-D). Idempotent.
+    ///
+    /// Same structure as the process watch: the timer fires on its own queue
+    /// and hands each poll to the reader's serial queue, so `CameraWatch.tick()`
+    /// and `Pipeline.handle(_:)` serialize with log lines and with the
+    /// process-watch polls. The cadence comes from the watch itself
+    /// (`cameraWatch.interval`, pinned at 2 s) rather than a second constant
+    /// here, so the poller and its timer cannot drift apart.
+    ///
+    /// The first poll is immediate: a camera already in use when NoPeek starts
+    /// is worth knowing about — that is exactly the state a user checks for —
+    /// and it is reported like any later one.
+    private func startCameraWatch() {
+        guard cameraWatchTimer == nil else { return }
+
+        let reader = self.reader
+        let timer = DispatchSource.makeTimerSource(queue: cameraWatchQueue)
+        timer.schedule(deadline: .now(), repeating: cameraWatch.interval)
+        timer.setEventHandler { [weak self] in
+            reader.performSerialized { [weak self] in
+                guard let self else { return }
+                // `tick()` reads the system camera state and returns an event
+                // only on an edge: `cameraOn` the first time a camera is seen
+                // in use, `cameraOff` once it has been out of use for longer
+                // than the 5 s debounce. From here on the event is routed
+                // exactly like a log-stream one (classify → log → notify /
+                // banner / tray); with actor "camera" it classifies NORMAL by
+                // default, which is the tier the user can mute.
+                guard let raw = self.cameraWatch.tick() else { return }
+                self.pipeline.handle(raw)
+            }
+        }
+        cameraWatchTimer = timer
+        timer.resume()
+    }
+
+    /// Cancels the camera polls; the same one-tick grace as `stopProcessWatch`.
+    private func stopCameraWatch() {
+        cameraWatchTimer?.cancel()
+        cameraWatchTimer = nil
     }
 }
