@@ -478,6 +478,95 @@ import PWCore
         #expect(try CalibrationService.load(from: url) == summary)
     }
 
+    // MARK: - The first-launch gate (ruling R24)
+
+    @Test func testAllPassedRequiresEveryStepToPass() {
+        // What "calibrated" means: this machine proved **every** detector. One
+        // timeout, one failure, or one step that never ran makes the run
+        // something other than a calibration (T18 review, ruling R24).
+        let run = CalibrationSummary(
+            date: Self.t0,
+            results: [
+                .screen: .passed(actor: "screencaptureui"),
+                .camera: .passed(actor: "Photo Booth"),
+                .mic: .passed(actor: "mic"),
+            ]
+        )
+        #expect(run.allPassed)
+        #expect(run.isComplete)
+        #expect(run.passedCount == 3)
+
+        // Any `.timedOut`…
+        #expect(!CalibrationSummary(date: Self.t0, results: [
+            .screen: .passed(actor: "screencaptureui"),
+            .camera: .timedOut,
+            .mic: .passed(actor: "mic"),
+        ]).allPassed)
+
+        // …any `.failed`…
+        #expect(!CalibrationSummary(date: Self.t0, results: [
+            .screen: .passed(actor: "screencaptureui"),
+            .camera: .failed(reason: CalibrationService.cancelledReason),
+            .mic: .passed(actor: "mic"),
+        ]).allPassed)
+
+        // …and any step that has not run yet (a partial record).
+        #expect(!CalibrationSummary(date: Self.t0, results: [
+            .screen: .passed(actor: "screencaptureui"),
+        ]).allPassed)
+        #expect(!CalibrationSummary(date: Self.t0, results: [:]).allPassed)
+    }
+
+    @Test func testHasPassedCalibrationIsTheFirstLaunchGate() throws {
+        // The predicate the app's auto-start reads (ruling R24): only a stored
+        // run whose steps all passed counts. No file, a corrupt file, and every
+        // non-passing shape are "not calibrated".
+        #expect(CalibrationService.hasPassedCalibration(at: temporaryURL()) == false)
+
+        let clock = Clock()
+        let allPassed = self.service(clock: clock)
+        allPassed.start()
+        passAll(allPassed)
+        let passedURL = temporaryURL()
+        try allPassed.persist(to: passedURL)
+        #expect(CalibrationService.hasPassedCalibration(at: passedURL))
+
+        let timedOut = self.service(clock: clock)
+        timedOut.start()
+        clock.advance(3 * Self.timeout)
+        _ = timedOut.status()
+        let timedOutURL = temporaryURL()
+        try timedOut.persist(to: timedOutURL)
+        #expect(CalibrationService.hasPassedCalibration(at: timedOutURL) == false)
+
+        let corruptURL = temporaryURL()
+        try FileManager.default.createDirectory(
+            at: corruptURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("{ not a summary".utf8).write(to: corruptURL)
+        #expect(CalibrationService.hasPassedCalibration(at: corruptURL) == false)
+    }
+
+    @Test func testTimedOutRunIsGateInert() throws {
+        // The T18 review finding itself, pinned: a completely timed-out run is
+        // a *completed* run — it persists and is logged — but it must never
+        // close the first-launch gate (ruling R24).
+        let clock = Clock()
+        let service = self.service(clock: clock)
+        service.start()
+        clock.advance(3 * Self.timeout)
+        #expect(service.status().isRunning == false)
+        #expect(service.status().currentStep == nil)
+
+        let url = temporaryURL()
+        try service.persist(to: url)
+
+        #expect(try CalibrationService.load(from: url)?.isComplete == true)  // it did complete…
+        #expect(try CalibrationService.load(from: url)?.allPassed == false)  // …with nothing passing…
+        #expect(CalibrationService.hasPassedCalibration(at: url) == false)   // …so the gate stays open
+    }
+
     @Test func testSummaryFileShapeIsReadableAndInStepOrder() throws {
         // The spec §9 state file is a user-facing record, so its shape is
         // pinned like the evidence log's: an ISO8601 date and one flat object

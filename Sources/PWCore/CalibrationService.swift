@@ -116,7 +116,10 @@ public struct CalibrationSummary: Codable, Equatable, Sendable {
         CalibrationStep.allCases.allSatisfy { results[$0] != nil }
     }
 
-    /// Every step passed (acceptance 12's all-✅ run).
+    /// Every step passed. This is what "this machine is calibrated" means: the
+    /// first-launch auto-start gate reads exactly this (ruling R24), so a run
+    /// whose steps timed out, were cancelled, or have not run yet is not a
+    /// calibration — no matter that it was persisted.
     public var allPassed: Bool {
         CalibrationStep.allCases.allSatisfy { results[$0]?.isPassed == true }
     }
@@ -446,6 +449,18 @@ public final class CalibrationService: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data = try Data(contentsOf: url)
         return try JSONDecoder().decode(CalibrationSummary.self, from: data)
+    }
+
+    /// The first-launch gate's predicate (ruling R24): whether the summary
+    /// stored at `url` proves **every** detector.
+    ///
+    /// `false` when no file exists, when a file exists but cannot be read or
+    /// decoded (a corrupt record must not claim the machine is calibrated), and
+    /// when the record holds anything less than three `.passed` verdicts. A run
+    /// that only timed out — or was cancelled — proves nothing, so the wizard
+    /// stays eligible to open by itself until the machine really passes.
+    public static func hasPassedCalibration(at url: URL) -> Bool {
+        (try? load(from: url))?.allPassed == true
     }
 
     // MARK: - Matching

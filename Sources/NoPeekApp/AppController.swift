@@ -64,9 +64,9 @@ final class AppController: @unchecked Sendable {
     }
 
     /// `~/Library/Application Support/NoPeek/calibration.json` — the spec §9
-    /// state directory, holding the last completed wizard run (T18). Its
-    /// existence is what stops the first-launch auto-start from re-running the
-    /// wizard on every launch.
+    /// state directory, holding the last completed wizard run (T18). A
+    /// *passing* summary here is what closes the first-launch auto-start gate
+    /// (ruling R24).
     static var defaultCalibrationURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/NoPeek/calibration.json")
@@ -262,11 +262,16 @@ final class AppController: @unchecked Sendable {
         startProcessWatch()
         startMicWatch()
 
-        // Spec §6: the wizard runs by itself on the first launch — a launch
-        // that finds no persisted summary. `start()` is the bootstrap path
+        // Spec §6 + ruling R24: the wizard runs by itself on a launch that has
+        // no *passing* calibration — no file, an unreadable one, or a record
+        // whose steps did not all pass. A run that only timed out therefore
+        // leaves the gate open rather than "calibrating" the machine by
+        // existing. The check runs exactly once per launch (here), so an
+        // unanswered wizard comes back on the *next* launch — it never re-opens
+        // in a loop inside one session. `start()` is the bootstrap path
         // (main.swift's `applicationDidFinishLaunching`), which is also the one
         // thread a window may be opened from.
-        if !hasCalibrationRecord {
+        if !hasPassedCalibration {
             MainActor.assumeIsolated { startCalibration() }
         }
     }
@@ -374,10 +379,13 @@ final class AppController: @unchecked Sendable {
 
     // MARK: - Calibration (T18, spec §6)
 
-    /// Whether a summary is on disk. The wizard's first-launch auto-start gate:
-    /// no file means this machine has never proven its detectors.
-    var hasCalibrationRecord: Bool {
-        FileManager.default.fileExists(atPath: Self.defaultCalibrationURL.path)
+    /// Whether this machine has a **passing** calibration on disk — the
+    /// first-launch gate's predicate (ruling R24). A missing file, an
+    /// unreadable one, and a record whose steps timed out, failed or never ran
+    /// all read as "not calibrated", so the wizard stays eligible to open by
+    /// itself.
+    var hasPassedCalibration: Bool {
+        CalibrationService.hasPassedCalibration(at: Self.defaultCalibrationURL)
     }
 
     /// Starts a calibration run and brings the wizard window up (spec §6
