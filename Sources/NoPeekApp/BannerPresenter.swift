@@ -246,6 +246,16 @@ private final class BannerView: NSView {
         super.hitTest(point) == nil ? nil : self
     }
 
+    /// Accept the *first* mouse-down while NoPeek is inactive — the banner's
+    /// normal context, since it pops up over whatever app the user is in. The
+    /// AppKit first-mouse rule withholds that click from a view that returns
+    /// `false` (the default), and this view has no `NSButton`-style control to
+    /// accept it on its behalf; without this the pinned "one click = dismiss +
+    /// open the log folder" would silently need two clicks.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         onClick?()
     }
