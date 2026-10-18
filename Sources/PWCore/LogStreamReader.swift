@@ -131,6 +131,21 @@ public final class LogStreamReader: @unchecked Sendable {
         withStateLock { stopLocked() }
     }
 
+    // MARK: - Serialization with the callbacks
+
+    /// Runs `body` on the reader's serial queue — the same one that delivers
+    /// `onLine` and `onState` — so a second event source feeding the same
+    /// `Pipeline` (the process watch, T13) serializes with log lines instead of
+    /// racing the non-thread-safe `Throttler` and `EvidenceLog` inside it.
+    ///
+    /// Asynchronous by design: the caller is a timer and must never block on
+    /// the reader. Bodies run in submission order, and — unlike `onLine` /
+    /// `onState` — a body submitted before `stop()` is **not** suppressed by
+    /// it, so a caller with its own life cycle cancels its own timer.
+    public func performSerialized(_ body: @escaping @Sendable () -> Void) {
+        queue.async(execute: body)
+    }
+
     // MARK: - State queue
 
     /// Runs `body` on the state queue — inline when already there, so a

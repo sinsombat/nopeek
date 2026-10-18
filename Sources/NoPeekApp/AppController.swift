@@ -12,20 +12,25 @@ import PWCore
 /// `ConfigStore(~/.config/nopeek/config.json)` → `EvidenceLog(~/Library/Logs/NoPeek)`
 /// → `Classifier` (built once from the config's effective lists) →
 /// `Throttler(60 s)` → `Pipeline` → `LogStreamReader` (default ndjson command
-/// + default predicate). The `Classifier` is a *snapshot*: T17 adds the config
-/// watcher and rebuilds it on change — live reload is not wired yet, and the
-/// `ConfigStore` is deliberately not started.
+/// + default predicate) → `ProcessWatch` (T13: the remote-tier process table
+/// watch, whose watchlist closure reads `config` live). The `Classifier` is a
+/// *snapshot*: T17 adds the config watcher and rebuilds it on change — live
+/// reload is not wired yet, and the `ConfigStore` is deliberately not started.
 ///
 /// **Startup order** (`start()`): the `monitor-started` lifecycle line first,
-/// then the reader. T21 wraps this with retention purge, the gap check and the
-/// heartbeat timer.
+/// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
+/// whose polls run on the reader's serial queue, so `tick()` and
+/// `pipeline.handle(_:)` serialize with log lines). T21 wraps this with
+/// retention purge, the gap check and the heartbeat timer.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
-/// exactly that. The sink therefore also runs on that queue: `EvidenceLog` is
-/// driven by one owner, and the only state the main thread shares with it — the
-/// tray and the reader state — sits behind `uiLock`. Notifications are posted
-/// on the main actor.
+/// exactly that. The process watch (T13) delivers its polls on the same queue
+/// (`LogStreamReader.performSerialized`), so the pipeline has one owner. The
+/// sink therefore also runs on that queue: `EvidenceLog` is driven by one
+/// owner, and the only state the main thread shares with it — the tray and the
+/// reader state — sits behind `uiLock`. Notifications are posted on the main
+/// actor.
 final class AppController: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -82,6 +87,17 @@ final class AppController: @unchecked Sendable {
     private let throttler: Throttler
     private let parser: LogLineParser
 
+    /// The remote tier's process watch (T13, spec §4-B): one 3 s poll of the
+    /// process table against the config's remote-control watchlist.
+    private let processWatch: ProcessWatch
+
+    /// Fires the process-watch polls. The poll body itself is delivered on the
+    /// reader's serial queue (see `startProcessWatch`); this queue only holds
+    /// the timer, so a busy main thread never delays a poll.
+    private let processWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.processwatch")
+    /// Armed by `start()`, cancelled by `stop()`.
+    private var processWatchTimer: DispatchSourceTimer?
+
     // MARK: - Shared state
 
     /// Guards `tray`, `logStreamState` and `started`: the sink and the reader's
@@ -118,6 +134,13 @@ final class AppController: @unchecked Sendable {
             retentionDays: configStore.config.logRetentionDays
         )
         self.parser = LogLineParser()
+
+        // The watchlist is read from the store on every tick, so T17's config
+        // reload takes effect without rebuilding anything here. Capturing the
+        // local store (not `self`) keeps the closure out of the init cycle.
+        self.processWatch = ProcessWatch(
+            names: { configStore.config.effectiveRemoteControl }
+        )
     }
 
     // MARK: - Life cycle
@@ -134,11 +157,13 @@ final class AppController: @unchecked Sendable {
 
         evidenceLog.appendRaw(kind: .monitorStarted)
         reader.start()
+        startProcessWatch()
     }
 
     /// Stops the reader and terminates its child, so quitting the app never
     /// leaves an orphaned `log stream` behind. Safe to call when not started.
     func stop() {
+        stopProcessWatch()
         reader.stop()
     }
 
@@ -232,5 +257,54 @@ final class AppController: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    // MARK: - Process watch (T13)
+
+    /// Poll cadence (spec §3: every 3 s).
+    private static let processWatchInterval: TimeInterval = 3
+
+    /// Arms the process-watch timer (spec §3/§4-B). Idempotent.
+    ///
+    /// The timer fires on `processWatchQueue`, and every poll hands its work
+    /// to the reader's serial queue: `ProcessWatch.tick()` and
+    /// `Pipeline.handle(_:)` then serialize with log lines, which is the
+    /// single-owner contract of the non-thread-safe `Throttler` and
+    /// `EvidenceLog` (T7/T11). The reader is captured here, on the main
+    /// thread, after `start()` has built it.
+    private func startProcessWatch() {
+        guard processWatchTimer == nil else { return }
+
+        let reader = self.reader
+        let timer = DispatchSource.makeTimerSource(queue: processWatchQueue)
+        // First poll immediately: a remote-control process that was already
+        // running at boot is worth knowing about, and it is logged as an
+        // appearance exactly like a later one. (Nothing re-fires until it
+        // leaves the table and comes back — the T13 edge rule.)
+        timer.schedule(deadline: .now(), repeating: Self.processWatchInterval)
+        timer.setEventHandler { [weak self] in
+            reader.performSerialized { [weak self] in
+                guard let self else { return }
+                // `tick()` reads the watchlist from the live config, lists
+                // the process table once, and returns one event per watched
+                // name that just appeared. From here on the events are
+                // routed exactly like log-stream ones (classify → log →
+                // notify / banner / tray).
+                for raw in self.processWatch.tick() {
+                    self.pipeline.handle(raw)
+                }
+            }
+        }
+        processWatchTimer = timer
+        timer.resume()
+    }
+
+    /// Cancels the polls. A poll already delivered to the reader's queue may
+    /// still run once (see `performSerialized`); that single tick is harmless
+    /// — the app is terminating, and the line it may append is a true
+    /// observation.
+    private func stopProcessWatch() {
+        processWatchTimer?.cancel()
+        processWatchTimer = nil
     }
 }
