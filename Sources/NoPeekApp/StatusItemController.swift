@@ -215,6 +215,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Spec §6 `Calibration Wizard…`: start a run and put the wizard window up
+    /// (the first launch does the same by itself when no summary exists).
+    @objc func runCalibration(_ sender: Any?) {
+        controller.startCalibration()
+    }
+
     @objc func pauseThirtyMinutes(_ sender: Any?) {
         controller.pause(for: 30 * 60)
         updateIcon()

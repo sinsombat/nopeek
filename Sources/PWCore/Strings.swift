@@ -199,6 +199,53 @@ public enum Strings {
         ],
         "about.ok": [.th: "OK", .en: "OK"],
 
+        // MARK: Calibration Wizard (T18, spec §6)
+
+        // Window title and one-line purpose. `th` keeps the English jargon
+        // name, like the menu item it is opened from.
+        "calib.title": [.th: "Calibration Wizard", .en: "Calibration Wizard"],
+        "calib.intro": [
+            .th: "ทดสอบว่า NoPeek จับสัญญาณบนเครื่องนี้ได้จริง — ทำตาม 3 ขั้นตอน",
+            .en: "Check that NoPeek's detectors work on this Mac — follow the three steps",
+        ],
+        // The three instructions (plan T18 step 5: ⌘⇧5 → Photo Booth → Voice
+        // Memos). R16 is why the first one is ⌘⇧5 and not Mission Control.
+        "calib.step.screen": [
+            .th: "1. กด ⌘⇧5 เพื่อแคปจอ",
+            .en: "1. Press ⌘⇧5 to capture the screen",
+        ],
+        "calib.step.camera": [.th: "2. เปิด Photo Booth", .en: "2. Open Photo Booth"],
+        "calib.step.mic": [
+            .th: "3. อัดเสียง Voice Memos",
+            .en: "3. Record with Voice Memos",
+        ],
+        // Per-step status. `waiting` is for a step that has not become current
+        // yet; the current one shows its countdown; the verdicts name what
+        // proved the detector (or why it did not).
+        "calib.status.waiting": [.th: "ยังไม่เริ่ม", .en: "not started"],
+        "calib.status.current": [
+            .th: "⏳ รอสัญญาณ… (เหลือ %@ วินาที)",
+            .en: "⏳ waiting for the signal… (%@ s left)",
+        ],
+        "calib.status.passed": [.th: "✅ %@", .en: "✅ %@"],
+        "calib.status.failed": [.th: "❌ %@", .en: "❌ %@"],
+        "calib.status.timeout": [.th: "⌛ หมดเวลา", .en: "⌛ timed out"],
+        // Result summary (acceptance 12: three verdicts, then the file).
+        "calib.summary.passed": [
+            .th: "✅ ผ่านครบทั้ง 3 detector",
+            .en: "✅ All 3 detectors passed",
+        ],
+        "calib.summary.incomplete": [
+            .th: "⚠️ ผ่าน %@ จาก 3 detector",
+            .en: "⚠️ %@ of 3 detectors passed",
+        ],
+        "calib.saved": [
+            .th: "บันทึกผลไว้ที่ calibration.json แล้ว",
+            .en: "Result saved to calibration.json",
+        ],
+        "calib.button.retry": [.th: "ทำใหม่", .en: "Restart"],
+        "calib.button.close": [.th: "ปิด", .en: "Close"],
+
         // MARK: App
 
         "app.name": [.th: "NoPeek", .en: "NoPeek"],

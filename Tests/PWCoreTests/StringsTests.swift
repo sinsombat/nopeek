@@ -115,6 +115,14 @@ import PWCore
             "menu.tooltip.paused",
             "about.version", "about.limits", "about.ok",
             "banner.org",
+            // T18's Calibration Wizard window (all four statuses, the two
+            // summary lines, the saved line and its two buttons).
+            "calib.title", "calib.intro",
+            "calib.step.screen", "calib.step.camera", "calib.step.mic",
+            "calib.status.waiting", "calib.status.current", "calib.status.passed",
+            "calib.status.failed", "calib.status.timeout",
+            "calib.summary.passed", "calib.summary.incomplete", "calib.saved",
+            "calib.button.retry", "calib.button.close",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")

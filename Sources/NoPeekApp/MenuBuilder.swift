@@ -74,6 +74,15 @@ final class MenuBuilder {
             )
         )
 
+        // Spec §6: `Calibration Wizard…` (also the first-launch auto-start).
+        menu.addItem(
+            actionRow(
+                Strings.t("menu.calibration", language),
+                #selector(StatusItemController.runCalibration(_:)),
+                target
+            )
+        )
+
         menu.addItem(.separator())
 
         // Spec §6: `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`. The timed rows

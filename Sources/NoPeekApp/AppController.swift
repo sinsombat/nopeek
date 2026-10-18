@@ -27,8 +27,9 @@ import PWCore
 /// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
 /// whose polls run on the reader's serial queue, so `tick()` and
 /// `pipeline.handle(_:)` serialize with log lines) and the mic watch (T15: the
-/// same shape at 2 s). T21 wraps this with retention purge, the gap check and
-/// the heartbeat timer.
+/// same shape at 2 s), and finally the T18 calibration wizard — which opens by
+/// itself on a launch that finds no persisted summary. T21 wraps this with
+/// retention purge, the gap check and the heartbeat timer.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
@@ -62,6 +63,15 @@ final class AppController: @unchecked Sendable {
             .appendingPathComponent("Library/Logs/NoPeek")
     }
 
+    /// `~/Library/Application Support/NoPeek/calibration.json` — the spec §9
+    /// state directory, holding the last completed wizard run (T18). Its
+    /// existence is what stops the first-launch auto-start from re-running the
+    /// wizard on every launch.
+    static var defaultCalibrationURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/NoPeek/calibration.json")
+    }
+
     // MARK: - Components
 
     /// Spec §7 config; loaded at construction, watched from T17 on.
@@ -70,6 +80,21 @@ final class AppController: @unchecked Sendable {
     let evidenceLog: EvidenceLog
     /// Notification delivery (spec §6); the app's only permission.
     let notifications: NotificationService
+
+    // MARK: - Calibration (T18, spec §6)
+
+    /// The Calibration Wizard's state machine. Fed every `RawEvent` the app
+    /// sees (see `route(_:)`) and driven by the wizard window's 1 s refresh;
+    /// ignores everything unless a run is in flight.
+    let calibration: CalibrationService
+
+    /// The wizard window. Built here — on the main thread, like everything the
+    /// window touches — but its window and views are only created by `show()`.
+    ///
+    /// Its three dependencies are passed as pieces rather than as `self`: the
+    /// language closure reads the live config exactly like `processWatch` and
+    /// `bannerPresenter` below, and the record URL is a static.
+    @MainActor let calibrationWindow: CalibrationWindowController
 
     /// The routing pipeline (T11). Built on first use — it captures `self` —
     /// from `start()` on the main thread, before any callback can touch it.
@@ -198,6 +223,26 @@ final class AppController: @unchecked Sendable {
             windowLevel: { BannerPresenter.windowLevel(forBannerLevel: configStore.config.bannerLevel) },
             logDirectoryURL: Self.defaultLogDirectory
         )
+
+        // The calibration run and its window (T18, spec §6). The service is
+        // built eagerly, not lazily like `pipeline`: it is fed from the
+        // reader's queue the moment the reader starts, so the first event must
+        // never race its creation. The language closure and the record URL are
+        // read live, so neither the window nor this wiring holds `self`.
+        let calibration = CalibrationService()
+        self.calibration = calibration
+        self.calibrationWindow = CalibrationWindowController(
+            calibration: calibration,
+            language: { Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage },
+            recordURL: Self.defaultCalibrationURL
+        )
+
+        // Wired last, when every stored property exists: the completion handler
+        // is what persists the summary and records the `calibration-result`
+        // lifecycle line.
+        calibration.onComplete = { [weak self] summary in
+            self?.calibrationDidComplete(summary)
+        }
     }
 
     // MARK: - Life cycle
@@ -216,6 +261,14 @@ final class AppController: @unchecked Sendable {
         reader.start()
         startProcessWatch()
         startMicWatch()
+
+        // Spec §6: the wizard runs by itself on the first launch — a launch
+        // that finds no persisted summary. `start()` is the bootstrap path
+        // (main.swift's `applicationDidFinishLaunching`), which is also the one
+        // thread a window may be opened from.
+        if !hasCalibrationRecord {
+            MainActor.assumeIsolated { startCalibration() }
+        }
     }
 
     /// Stops the reader and terminates its child, so quitting the app never
@@ -224,6 +277,9 @@ final class AppController: @unchecked Sendable {
         stopProcessWatch()
         stopMicWatch()
         reader.stop()
+        // A run that is cut short by the app quitting is abandoned, not
+        // completed: nothing is persisted (see `CalibrationService.cancel`).
+        calibration.cancel()
     }
 
     // MARK: - State for the status menu (T17)
@@ -316,6 +372,61 @@ final class AppController: @unchecked Sendable {
         }
     }
 
+    // MARK: - Calibration (T18, spec §6)
+
+    /// Whether a summary is on disk. The wizard's first-launch auto-start gate:
+    /// no file means this machine has never proven its detectors.
+    var hasCalibrationRecord: Bool {
+        FileManager.default.fileExists(atPath: Self.defaultCalibrationURL.path)
+    }
+
+    /// Starts a calibration run and brings the wizard window up (spec §6
+    /// `Calibration Wizard…`; also the first launch's auto-start). Main thread:
+    /// the run is drawn by an AppKit window. Safe to call while a run is in
+    /// flight — `start()` is a fresh run.
+    @MainActor
+    func startCalibration() {
+        calibration.start()
+        calibrationWindow.show()
+    }
+
+    /// The run finished — every step has a verdict. Persists the summary and
+    /// records the spec §8 `calibration-result` lifecycle line.
+    ///
+    /// Runs on whichever thread resolved the last step: the reader's queue when
+    /// an event did it, the main thread when the wizard window noticed a
+    /// timeout. Both the write and the log line are handed to the reader's
+    /// serial queue — the `EvidenceLog`'s single owner — and the window picks
+    /// the saved line up on its next refresh.
+    private func calibrationDidComplete(_ summary: CalibrationSummary) {
+        let reader = self.reader
+        reader.performSerialized { [weak self] in
+            guard let self else { return }
+            // Best effort, like the evidence log itself: a failed write leaves
+            // the previous record (or none) in place, and the wizard window's
+            // `saved` line — which is drawn from the file, not from this call —
+            // stays away, so a write failure is visible rather than silent.
+            try? self.calibration.persist(summary, to: Self.defaultCalibrationURL)
+            self.evidenceLog.appendRaw(kind: .calibrationResult)
+        }
+    }
+
+    // MARK: - Event funnel
+
+    /// Routes one observed event to every consumer: the pipeline (classify →
+    /// log → notify / banner / tray) and the T18 calibration run. Both sit on
+    /// the reader's serial queue.
+    ///
+    /// The calibration service is offered *every* event — it is the one that
+    /// knows whether a run is in flight and whether the event is the current
+    /// step's proof, so there is no separate gate here to race against (or to
+    /// forget). When no run is in flight the call is a lock acquisition and a
+    /// comparison.
+    private func route(_ raw: RawEvent) {
+        pipeline.handle(raw)
+        calibration.ingest(raw)
+    }
+
     // MARK: - Pipeline sink
 
     /// Executes one `Pipeline` action. Runs on the reader's serial callback
@@ -391,7 +502,7 @@ final class AppController: @unchecked Sendable {
     /// rule are skipped without ceremony (T4 precision).
     private func consume(_ line: Data) {
         guard let raw = parser.parse(line: line) else { return }
-        pipeline.handle(raw)
+        route(raw)
     }
 
     /// Reader state transitions: kept for the menu icon (T17) and written to
@@ -446,9 +557,9 @@ final class AppController: @unchecked Sendable {
                 // the process table once, and returns one event per watched
                 // name that just appeared. From here on the events are
                 // routed exactly like log-stream ones (classify → log →
-                // notify / banner / tray).
+                // notify / banner / tray, and offered to a calibration run).
                 for raw in self.processWatch.tick() {
-                    self.pipeline.handle(raw)
+                    self.route(raw)
                 }
             }
         }
@@ -494,9 +605,10 @@ final class AppController: @unchecked Sendable {
                 // 5 s debounce. From here on the event is routed exactly like a
                 // log-stream one (classify → log → notify / banner / tray);
                 // with actor "mic" it classifies NORMAL by default, which is
-                // the tier the user can mute.
+                // the tier the user can mute. (It is also the calibration
+                // wizard's mic proof, which is why it goes through `route`.)
                 guard let raw = self.micWatch.tick() else { return }
-                self.pipeline.handle(raw)
+                self.route(raw)
             }
         }
         micWatchTimer = timer
