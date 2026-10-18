@@ -226,6 +226,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.runCheckup()
     }
 
+    /// Spec §6 `Export รายงาน…`: the export panel — 7 วัน / 30 วัน / ทั้งหมด
+    /// over the evidence log (T20).
+    @objc func runExport(_ sender: Any?) {
+        controller.runExport()
+    }
+
     @objc func pauseThirtyMinutes(_ sender: Any?) {
         controller.pause(for: 30 * 60)
         updateIcon()

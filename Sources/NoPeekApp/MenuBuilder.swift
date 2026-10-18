@@ -93,6 +93,17 @@ final class MenuBuilder {
             )
         )
 
+        // Spec §6: `Export รายงาน…` — the evidence export's range presets
+        // (T20), straight after the checkup so both "look at this Mac" actions
+        // sit together.
+        menu.addItem(
+            actionRow(
+                Strings.t("menu.export", language),
+                #selector(StatusItemController.runExport(_:)),
+                target
+            )
+        )
+
         menu.addItem(.separator())
 
         // Spec §6: `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`. The timed rows

@@ -330,6 +330,36 @@ public enum Strings {
         "checkup.button.rerun": [.th: "ตรวจใหม่", .en: "Run again"],
         "checkup.button.close": [.th: "ปิด", .en: "Close"],
 
+        // MARK: Export (T20, spec §6)
+
+        // Window title; like the wizard's and the checkup's, `th` keeps the
+        // English jargon name it is opened by in the menu.
+        "export.title": [.th: "Export รายงาน", .en: "Export report"],
+        "export.intro": [
+            .th: "สร้างจาก evidence log ของเครื่องนี้: สรุป (md) + ตาราง (csv) + สำเนา log ดิบ (ndjson)",
+            .en: "Built from this Mac's evidence log: summary (md) + table (csv) + raw log copy (ndjson)",
+        ],
+        // Why the files are not in ~/Downloads: writing there raises macOS's
+        // folder-permission prompt, and NoPeek asks for no permission of its
+        // own (ruling F4, spec §9/§13).
+        "export.location": [
+            .th: "ไฟล์เก็บไว้ที่ %@ — ไม่เขียนไป Downloads (เลี่ยง permission prompt) กดเปิดใน Finder เพื่อย้ายไฟล์เอง",
+            .en: "Files go to %@ — never Downloads, so macOS shows no folder prompt. Use Reveal in Finder to move them.",
+        ],
+        "export.preset.7d": [.th: "7 วัน", .en: "7 days"],
+        "export.preset.30d": [.th: "30 วัน", .en: "30 days"],
+        "export.preset.all": [.th: "ทั้งหมด", .en: "All"],
+        "export.running": [.th: "⏳ กำลัง export…", .en: "⏳ Exporting…"],
+        "export.done": [.th: "✅ %@ events → 3 ไฟล์", .en: "✅ %@ events → 3 files"],
+        "export.empty": [
+            .th: "ไม่พบ event ในช่วงนี้ — ยังได้ไฟล์เปล่า 3 ไฟล์",
+            .en: "No events in this range — three empty files were still written",
+        ],
+        "export.failed": [.th: "❌ export ไม่สำเร็จ: %@", .en: "❌ Export failed: %@"],
+        "export.savedTo": [.th: "บันทึกไว้ที่ %@", .en: "Saved to %@"],
+        "export.reveal": [.th: "เปิดใน Finder", .en: "Reveal in Finder"],
+        "export.button.close": [.th: "ปิด", .en: "Close"],
+
         // MARK: App
 
         "app.name": [.th: "NoPeek", .en: "NoPeek"],

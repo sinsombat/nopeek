@@ -220,6 +220,29 @@ public final class EvidenceLog {
     /// individually rather than failing the whole read (the log is read while
     /// it is being written, spec §4). An inverted range matches nothing.
     public func read(from: Date, to: Date) -> [ClassifiedEvent] {
+        matching(from: from, to: to).map(\.event)
+    }
+
+    /// The raw, **undecoded bytes** of every line whose event `ts` falls in
+    /// `[from, to]`, in the same order as `read(from:to:)` — the exporter
+    /// (T20) copies this verbatim instead of re-encoding, so the ndjson
+    /// artefact is the log's own spelling of the range.
+    ///
+    /// The window rule is `read`'s, applied to the same lines: a line is
+    /// included only when it decodes *and* its timestamp is in range (a torn
+    /// or foreign line has no timestamp to filter by, and is skipped exactly as
+    /// `read` skips it). The line's trailing newline is not part of the
+    /// returned bytes: it is the separator between lines, not line content.
+    public func rawLines(from: Date, to: Date) -> [Data] {
+        matching(from: from, to: to).map(\.bytes)
+    }
+
+    /// Both views of one range from a **single pass** over the day files: the
+    /// bytes of each line that belongs to the window and the event they decode
+    /// to. `read` and `rawLines` are this, seen one way each — one loop, so the
+    /// two can never disagree about which lines are in a range or in what
+    /// order they come back.
+    private func matching(from: Date, to: Date) -> [(bytes: Data, event: ClassifiedEvent)] {
         guard from <= to else { return [] }
 
         let calendar = Calendar.current
@@ -227,18 +250,18 @@ public final class EvidenceLog {
         let lastDay = calendar.startOfDay(for: to)
         let decoder = JSONDecoder()
 
-        var events: [ClassifiedEvent] = []
+        var matches: [(bytes: Data, event: ClassifiedEvent)] = []
         for file in logFiles().sorted(by: { $0.day < $1.day }) {
             guard file.day >= firstDay, file.day <= lastDay else { continue }
             guard let data = try? Data(contentsOf: file.url) else { continue }
             for line in data.split(separator: 0x0A) {
                 guard let event = try? decoder.decode(ClassifiedEvent.self, from: line) else { continue }
                 if event.event.ts >= from && event.event.ts <= to {
-                    events.append(event)
+                    matches.append((bytes: Data(line), event: event))
                 }
             }
         }
-        return events
+        return matches
     }
 
     // MARK: - File discovery

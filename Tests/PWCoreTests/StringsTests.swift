@@ -137,6 +137,13 @@ import PWCore
             "checkup.list.more",
             "checkup.severity.ok", "checkup.severity.warn", "checkup.severity.attention",
             "checkup.open", "checkup.button.rerun", "checkup.button.close",
+            // T20's Export panel (the three presets, the running/done/empty/
+            // failed lines, the F4 location line, the pinned reveal button and
+            // its close companion).
+            "export.title", "export.intro", "export.location",
+            "export.preset.7d", "export.preset.30d", "export.preset.all",
+            "export.running", "export.done", "export.empty", "export.failed",
+            "export.savedTo", "export.reveal", "export.button.close",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")

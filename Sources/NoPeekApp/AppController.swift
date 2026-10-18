@@ -108,6 +108,24 @@ final class AppController: @unchecked Sendable {
     /// window touches — while its window and views are only created by `show()`.
     @MainActor let checkupWindow: CheckupWindowController
 
+    // MARK: - Export (T20, spec §6)
+
+    /// The evidence exporter (plan T20): a date range in, three artifacts out
+    /// (md summary + csv table + verbatim ndjson copy) under
+    /// `~/Library/Logs/NoPeek/exports` (ruling F4: never `~/Downloads`, so the
+    /// app never triggers a folder-permission prompt — the panel's reveal
+    /// button is how the user moves the files).
+    ///
+    /// It only *reads* the log, so the panel may run it while the pipeline
+    /// keeps watching; a line appended during an export carries the moment it
+    /// was appended, which is after the preset's range end (the press) and so
+    /// stays out of the report.
+    let exporter: Exporter
+
+    /// The export panel, built on the main thread like the checkup window; its
+    /// window and views are only created by `show()`.
+    @MainActor let exportPanel: ExportPanelController
+
     /// The routing pipeline (T11). Built on first use — it captures `self` —
     /// from `start()` on the main thread, before any callback can touch it.
     private(set) lazy var pipeline: Pipeline = Pipeline(
@@ -265,6 +283,15 @@ final class AppController: @unchecked Sendable {
         self.checkup = checkup
         self.checkupWindow = CheckupWindowController(checkup: checkup, language: language)
 
+        // The evidence export (T20, spec §6): the exporter reads the log the
+        // pipeline writes, and the panel drives it with the three presets. The
+        // exporter's default destination — `~/Library/Logs/NoPeek/exports`
+        // (ruling F4) — is used as-is; nothing here chooses a folder, so the
+        // app has no path to `~/Downloads`.
+        let exporter = Exporter(log: evidenceLog)
+        self.exporter = exporter
+        self.exportPanel = ExportPanelController(exporter: exporter, language: language)
+
         // Wired last, when every stored property exists: the completion handler
         // is what persists the summary and records the `calibration-result`
         // lifecycle line.
@@ -284,6 +311,19 @@ final class AppController: @unchecked Sendable {
             let reader = self.reader
             reader.performSerialized { [weak self] in
                 self?.evidenceLog.appendRaw(kind: .checkupRun)
+            }
+        }
+
+        // Also last, for the same reason: the export's spec §8 lifecycle line
+        // (`export-created`) goes through the lazy `reader` to the evidence log
+        // — appended on the reader's serial queue, the log's single owner —
+        // once the files really exist. A failed export writes no line, so the
+        // log never claims an artefact that was not produced.
+        exportPanel.onExported = { [weak self] in
+            guard let self else { return }
+            let reader = self.reader
+            reader.performSerialized { [weak self] in
+                self?.evidenceLog.appendRaw(kind: .exportCreated)
             }
         }
     }
@@ -474,6 +514,18 @@ final class AppController: @unchecked Sendable {
     @MainActor
     func runCheckup() {
         checkupWindow.show()
+    }
+
+    // MARK: - Export (T20, spec §6)
+
+    /// Opens the export panel (spec §6 `Export รายงาน…`). The panel runs the
+    /// export itself, off the main thread, and fires `onExported` when the
+    /// three files are written — which is where the spec §8 `export-created`
+    /// lifecycle line is appended (see the panel's construction). Main thread
+    /// only: the panel is an AppKit window.
+    @MainActor
+    func runExport() {
+        exportPanel.show()
     }
 
     // MARK: - Event funnel
