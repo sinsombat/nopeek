@@ -19,7 +19,7 @@ import PWCore
 /// 2 s microphone poll). Camera detection needs no component of its own: the
 /// T14 field-test fix moved it onto the log stream (the parser's
 /// `KindRule.cameraDefaults` + the predicate's camera clauses). The
-/// `Classifier` is a *snapshot*: T17 adds the config watcher and rebuilds it on
+/// `Classifier` is a *snapshot*: T23 adds the config watcher and rebuilds it on
 /// change — live reload is not wired yet, and the `ConfigStore` is deliberately
 /// not started.
 ///
@@ -109,7 +109,7 @@ final class AppController: @unchecked Sendable {
     private let micWatch: MicWatch
 
     /// The red banner's per-actor cooldown (T16, spec §5). Built once from the
-    /// config `init` loaded, like the `Classifier` snapshot: T17's live reload
+    /// config `init` loaded, like the `Classifier` snapshot: T23's live reload
     /// rebuilds it when `orgBannerCooldownSeconds` changes.
     private let bannerPolicy: BannerPolicy
 
@@ -132,13 +132,20 @@ final class AppController: @unchecked Sendable {
 
     // MARK: - Shared state
 
-    /// Guards `tray`, `logStreamState` and `started`: the sink and the reader's
-    /// state callback write them off the reader queue, the status menu (T17)
-    /// reads them on the main thread.
+    /// Guards `tray`, `readerStateValue`, `gapValue` and `started`: the sink
+    /// and the reader's state callback write them off the reader queue, the
+    /// status menu (T17) reads them on the main thread.
     private let uiLock = NSLock()
     private var tray = TrayModel()
     private var readerStateValue: LogStreamReader.State?
+    /// The latest monitoring gap; T24's lifecycle check sets it at startup
+    /// (spec §6's gap row). `nil` until then — the menu simply omits the row.
+    private var gapValue: GapReport?
     private var started = false
+
+    /// The pending auto-resume of a timed `Pause` (T17, spec §6). Main thread
+    /// only: the menu schedules it, and its own work item clears it.
+    private var pauseWork: DispatchWorkItem?
 
     // MARK: - Init
 
@@ -230,6 +237,83 @@ final class AppController: @unchecked Sendable {
     /// the degraded icon from this.
     var logStreamState: LogStreamReader.State? {
         uiLock.withLock { readerStateValue }
+    }
+
+    /// The latest monitoring gap, for the menu's gap row (spec §6). T24's
+    /// startup check assigns the `GapReport` it detects; until then this is
+    /// `nil` and the row does not exist.
+    var latestGap: GapReport? {
+        get { uiLock.withLock { gapValue } }
+        set { uiLock.withLock { gapValue = newValue } }
+    }
+
+    /// Whether NORMAL notifications are suppressed right now (spec §6 Pause).
+    var isPaused: Bool {
+        pipeline.isPaused
+    }
+
+    // MARK: - Pause (T17, spec §6)
+
+    /// Pauses NORMAL notifications for `interval` and resumes automatically
+    /// (spec §6: `Pause 30 นาที / 1 ชั่วโมง`). ORG and REMOTE are untouched
+    /// either way — the pause only gates the pipeline's NORMAL notification
+    /// path. Main thread only: the menu calls this, and the auto-resume lands
+    /// back on the main queue.
+    func pause(for interval: TimeInterval) {
+        pauseWork?.cancel()
+        pipeline.setPaused(true)
+        let work = DispatchWorkItem { [weak self] in self?.resume() }
+        pauseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// Lifts a pause immediately (spec §6 `หยุด pause`); also the timed
+    /// options' landing. Idempotent. Main thread only.
+    func resume() {
+        pauseWork?.cancel()
+        pauseWork = nil
+        pipeline.setPaused(false)
+    }
+
+    // MARK: - Config actions (T17, spec §6)
+
+    /// Adds `actor` to the allowlist and persists it through
+    /// `ConfigStore.update` (ruling F2). Already-trusted actors are a no-op,
+    /// so a write happens only when the list really changes.
+    ///
+    /// The running `Classifier` is a snapshot: the new entry takes effect when
+    /// the classifier is rebuilt (T23's live apply; until then, at the next
+    /// launch), which is why nothing here touches the pipeline.
+    func trust(_ actor: String) throws {
+        try configStore.update { config in
+            guard !config.allowlist.contains(where: {
+                $0.caseInsensitiveCompare(actor) == .orderedSame
+            }) else { return }
+            config.allowlist.append(actor)
+        }
+    }
+
+    /// Removes one allowlist entry (spec §6 `ยกเลิก trust`), persisted the same
+    /// way. An entry that is not present is a no-op. Same snapshot rule as
+    /// `trust(_:)`.
+    func untrust(_ entry: String) throws {
+        try configStore.update { config in
+            config.allowlist.removeAll { $0 == entry }
+        }
+    }
+
+    /// Re-reads the config from disk (spec §6 `Reload config`). The classifier
+    /// and banner policy are not rebuilt here — that is T23's live-apply
+    /// wiring — so a changed list takes effect at the next launch until then.
+    /// The reload itself is recorded as the spec §8 lifecycle event
+    /// `config-reloaded`; the line is appended on the reader's serial queue,
+    /// the evidence log's single owner.
+    func reloadConfig() {
+        configStore.load()
+        let reader = self.reader
+        reader.performSerialized { [weak self] in
+            self?.evidenceLog.appendRaw(kind: .configReloaded)
+        }
     }
 
     // MARK: - Pipeline sink

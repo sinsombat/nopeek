@@ -75,9 +75,11 @@ import PWCore
     }
 
     @Test func testSpecMenuAndWarningCopy() {
-        // Spec §6 dropdown copy, verbatim.
+        // Spec §6 dropdown copy, verbatim — including the captured line's
+        // literal example "เมื่อ 3s ที่แล้ว", so the age is rendered with its
+        // unit (T17: `String(format:)` with actor + whole seconds).
         #expect(Strings.t("menu.status.idle", .th) == "เฝ้าระวังอยู่ — ไม่มีการส่อง")
-        #expect(Strings.t("menu.status.captured", .th) == "กำลังถูกแคปจอโดย %@ (เมื่อ %@ ที่แล้ว)")
+        #expect(Strings.t("menu.status.captured", .th) == "กำลังถูกแคปจอโดย %@ (เมื่อ %@s ที่แล้ว)")
         #expect(Strings.t("menu.status.gap", .th) == "⚠️ ไม่ได้เฝ้าช่วง %@–%@")
         #expect(Strings.t("menu.notif.denied", .th) == "notification ปิด — แบนเนอร์ยังทำงาน")
     }
@@ -93,7 +95,8 @@ import PWCore
     // MARK: - Required keys
 
     @Test func testRequiredKeysExist() {
-        // The keys the plan's T3 interface requires (at minimum).
+        // The keys the plan's T3 interface requires (at minimum), plus the
+        // rows/actions T17's full status menu adds.
         let required: Set<String> = [
             "notif.org.title", "notif.org.body",
             "notif.remote.title", "notif.remote.body",
@@ -105,6 +108,12 @@ import PWCore
             "menu.pause.1h", "menu.pause.resume", "menu.calibration",
             "menu.checkup", "menu.export", "menu.openLog", "menu.openConfig",
             "menu.reloadConfig", "menu.about", "menu.quit", "menu.notif.denied",
+            "menu.events.empty", "menu.event.row", "menu.event.count",
+            "menu.trust.done", "menu.untrust.done", "menu.reload.done",
+            "menu.config.failed",
+            "menu.tooltip.normal", "menu.tooltip.active", "menu.tooltip.degraded",
+            "menu.tooltip.paused",
+            "about.version", "about.limits", "about.ok",
             "banner.org",
         ]
         for key in required {

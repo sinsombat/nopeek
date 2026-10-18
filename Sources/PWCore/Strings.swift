@@ -33,8 +33,9 @@ public struct NotificationCopy: Equatable, Sendable {
 ///
 /// Keys are flat and dotted by area:
 /// - `notif.*`  notification title/body copy, grouped per tier
-/// - `menu.*`   status-menu labels and status lines
+/// - `menu.*`   status-menu labels, status lines and state tooltips
 /// - `banner.*` on-screen banner copy (spec §6)
+/// - `about.*`  the About panel (name/version/limits, spec §13)
 /// - `app.*`    the product name used for accessibility labels
 ///
 /// `%@` marks a `String(format:)` placeholder. `StringsTests.testKeyParity`
@@ -126,12 +127,23 @@ public enum Strings {
 
         "menu.status.idle": [.th: "เฝ้าระวังอยู่ — ไม่มีการส่อง", .en: "Watching — nothing detected"],
         "menu.status.captured": [
-            .th: "กำลังถูกแคปจอโดย %@ (เมื่อ %@ ที่แล้ว)",
-            .en: "Screen capture by %@ (%@ ago)",
+            .th: "กำลังถูกแคปจอโดย %@ (เมื่อ %@s ที่แล้ว)",
+            .en: "Screen capture by %@ (%@s ago)",
         ],
         "menu.status.gap": [.th: "⚠️ ไม่ได้เฝ้าช่วง %@–%@", .en: "⚠️ Not watching %@–%@"],
+        // The ten recent tray events: "HH:mm:ss  TIER  actor — kind", with the
+        // `menu.event.count` suffix when a throttled burst was folded in.
+        "menu.events.empty": [.th: "ยังไม่มีเหตุการณ์", .en: "No events yet"],
+        "menu.event.row": [.th: "%@  %@  %@ — %@", .en: "%@  %@  %@ — %@"],
+        "menu.event.count": [.th: "×%@", .en: "×%@"],
         "menu.trust": [.th: "Trust แอปนี้…", .en: "Trust this app…"],
         "menu.untrust": [.th: "ยกเลิก trust", .en: "Untrust"],
+        // One-line confirmations, shown as the status line for a few seconds
+        // (T17 keeps the trust flow notification-free).
+        "menu.trust.done": [.th: "เพิ่ม %@ เข้า allowlist แล้ว", .en: "Trusted %@"],
+        "menu.untrust.done": [.th: "เอา %@ ออกจาก allowlist แล้ว", .en: "Untrusted %@"],
+        "menu.reload.done": [.th: "โหลด config ใหม่แล้ว", .en: "Config reloaded"],
+        "menu.config.failed": [.th: "บันทึก config ไม่สำเร็จ", .en: "Could not save the config"],
         "menu.test": [.th: "Test alert", .en: "Test alert"],
         "menu.pause.30m": [.th: "Pause 30 นาที", .en: "Pause 30 minutes"],
         "menu.pause.1h": [.th: "Pause 1 ชั่วโมง", .en: "Pause 1 hour"],
@@ -144,6 +156,24 @@ public enum Strings {
         "menu.reloadConfig": [.th: "Reload config", .en: "Reload config"],
         "menu.about": [.th: "About NoPeek", .en: "About NoPeek"],
         "menu.quit": [.th: "Quit NoPeek", .en: "Quit NoPeek"],
+        // The four status-item tooltips (T17, spec §6). The name leads so a
+        // hover over the menu bar says what the symbol is about.
+        "menu.tooltip.normal": [
+            .th: "NoPeek — เฝ้าระวังอยู่",
+            .en: "NoPeek — watching",
+        ],
+        "menu.tooltip.active": [
+            .th: "NoPeek — กำลังถูกส่องอยู่",
+            .en: "NoPeek — being observed",
+        ],
+        "menu.tooltip.degraded": [
+            .th: "NoPeek — log stream หยุดทำงาน กำลังลองใหม่",
+            .en: "NoPeek — log stream down, retrying",
+        ],
+        "menu.tooltip.paused": [
+            .th: "NoPeek — pause อยู่ (NORMAL เงียบ; ORG/REMOTE ยังแจ้ง)",
+            .en: "NoPeek — paused (NORMAL muted; ORG/REMOTE still alert)",
+        ],
         // Shown when notification permission was denied (spec §6) — the banner
         // path does not depend on that permission.
         "menu.notif.denied": [
@@ -158,6 +188,16 @@ public enum Strings {
             .th: "🚨 มีการควบคุมระยะไกล: %@ — %@",
             .en: "🚨 Remote control: %@ — %@",
         ],
+
+        // MARK: About (T17)
+
+        "about.version": [.th: "เวอร์ชัน %@", .en: "Version %@"],
+        // Spec §13's first honest limit, one line.
+        "about.limits": [
+            .th: "Detect + notify เท่านั้น — บล็อก/หยุดไม่ได้",
+            .en: "Detect and notify only — it cannot block or stop what it sees",
+        ],
+        "about.ok": [.th: "OK", .en: "OK"],
 
         // MARK: App
 
