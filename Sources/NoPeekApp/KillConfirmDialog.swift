@@ -141,6 +141,13 @@ enum KillConfirmDialog {
 ///   considered;
 /// - the executable is a fixed absolute path, and the shell string is passed as
 ///   a single `-e` argument, never through a shell of our own.
+///
+/// **The caller owns the pid-reuse guard.** A pid and a signal are all this
+/// method receives, so it cannot ask whether the pid still is the process the
+/// user meant — and it is the one signal that runs *as root*, where a recycled
+/// pid would be worst. `AppController.confirmAndKill` therefore re-checks
+/// `KillController.guardPasses(pid:expectedName:)` immediately before calling
+/// this, and logs a refusal instead when the pid has moved on.
 enum AdminKiller {
 
     /// Runs the elevated kill and reports whether `kill(1)` exited 0 — which is

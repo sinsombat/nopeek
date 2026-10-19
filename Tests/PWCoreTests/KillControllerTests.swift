@@ -242,6 +242,35 @@ import PWCore
         #expect(KillController.signalName(2) == "signal 2")
     }
 
+    // MARK: - The guard as a question (the elevated-kill path)
+
+    @Test func testGuardPassesAnswersForEveryPidState() {
+        // `KillController.guardPasses` is the pid-reuse guard for the **root**
+        // signal (`AdminKiller`'s `kill(1)` after the admin prompt), which never
+        // travels through `kill(pid:expectedName:force:)`. Same rule, same
+        // answer table — and a query, so there is no signaller to spy on.
+        #expect(KillController.guardPasses(pid: 4242, expectedName: "sleep", processName: { _ in "sleep" }))
+        #expect(!KillController.guardPasses(pid: 4242, expectedName: "sleep", processName: { _ in "recycled" }))
+        #expect(!KillController.guardPasses(pid: 4242, expectedName: "sleep", processName: { _ in nil }))
+        #expect(!KillController.guardPasses(pid: 4242, expectedName: "sleep", processName: { _ in "" }))
+        // No pid at all is never a passing guard, whatever the name source says.
+        #expect(!KillController.guardPasses(pid: 0, expectedName: "kernel_task", processName: { _ in "kernel_task" }))
+        #expect(!KillController.guardPasses(pid: -1, expectedName: "sleep", processName: { _ in "sleep" }))
+    }
+
+    @Test func testGuardPassesAgainstThisMachine() {
+        // The real name source, read-only: this runner passes its own guard,
+        // and asks for nothing that is not this process.
+        let mine = KillController.systemName(getpid())
+        #expect(mine != nil)
+        #expect(KillController.guardPasses(pid: getpid(), expectedName: mine ?? ""))
+        #expect(!KillController.guardPasses(pid: getpid(), expectedName: "some-other-process"))
+        // A root process answers `true` for its real name (what acceptance 16
+        // needs) and `false` for anything else.
+        #expect(KillController.guardPasses(pid: 1, expectedName: "launchd"))
+        #expect(!KillController.guardPasses(pid: 1, expectedName: "sleep"))
+    }
+
     @Test func testSmokeSystemNameReadsThisRunner() {
         // The real `p_comm` source (the same field `ProcessWatch` reports as an
         // event's actor). Read-only, and the only real-machine call in the

@@ -74,6 +74,16 @@ import PWCore
         )
     }
 
+    @Test func testAdminRefusalIsItsOwnLogLine() {
+        // The third guard (before the root signal) gets a sentence that says
+        // *where* it refused: a reader must be able to tell this case from the
+        // ordinary pre-`SIGTERM` refusal, because it is the one that stopped a
+        // root-level signal.
+        let refusal = KillCopy.adminRefusalLogSummary(name: "launchd", pid: 1)
+        #expect(refusal == "manual: pid-reuse guard refused 1 for launchd before the elevated kill — no signal sent")
+        #expect(refusal != KillCopy.logSummary(.refusedNameMismatch, name: "launchd", pid: 1, initiator: .manual))
+    }
+
     // MARK: - User-facing status lines
 
     @Test func testOutcomeLineIsLocalizedAndNamesTheActor() {

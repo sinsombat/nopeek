@@ -278,6 +278,32 @@ public struct KillController: @unchecked Sendable {
         default: "signal \(signal)"
         }
     }
+
+    /// The pid-reuse guard **as a question**, for the one signal that does not
+    /// travel through `kill(pid:expectedName:force:)`: the elevated `kill(1)`
+    /// that `AdminKiller` runs as root after the admin prompt.
+    ///
+    /// That path is the guard's longest blind spot — a password dialog is a
+    /// human-scale window, and a pid recycled inside it would be signalled *as
+    /// root*. `true` only when the kernel still names `pid` exactly
+    /// `expectedName`; a pid that is gone (no name) and a pid that now belongs
+    /// to somebody else both answer `false`. `processName` is injectable
+    /// exactly like the instance's, so the rule is unit-testable without a
+    /// process existing.
+    ///
+    /// What this cannot fix: the microseconds between a passing check and
+    /// `osascript` launching `kill` are not atomic. The window is reduced from
+    /// human-scale to sub-millisecond, which is the honest limit of a
+    /// `/usr/bin/osascript` elevation with no privileged helper (spec §13).
+    public static func guardPasses(
+        pid: Int32,
+        expectedName: String,
+        processName: @escaping (Int32) -> String? = KillController.systemName
+    ) -> Bool {
+        guard pid > 0 else { return false }
+        guard let actual = processName(pid) else { return false }
+        return actual == expectedName
+    }
 }
 
 // MARK: - AutoKillDecision
@@ -450,6 +476,19 @@ public enum KillCopy {
     /// killed until the window slides (spec §6d).
     public static func haltLogSummary(name: String, count: Int) -> String {
         "auto-kill loop guard halted \(name) at \(count)/hour — no kill"
+    }
+
+    /// The refusal that happens *after* the admin prompt was accepted, in the
+    /// interval before the elevated `kill(1)` would run as root: the pid must
+    /// still be the process the dialog named (spec §6d's guard, applied to the
+    /// one signal `KillController` does not send itself).
+    ///
+    /// Deliberately a different sentence from the ordinary
+    /// `.refusedNameMismatch` line: a log reader has to be able to tell which
+    /// check refused, and "before the elevated kill" is the case that matters
+    /// most.
+    public static func adminRefusalLogSummary(name: String, pid: Int32) -> String {
+        "manual: pid-reuse guard refused \(pid) for \(name) before the elevated kill — no signal sent"
     }
 
     // MARK: - Status lines (user-facing)

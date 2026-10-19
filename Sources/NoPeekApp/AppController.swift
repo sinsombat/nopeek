@@ -578,6 +578,12 @@ final class AppController: @unchecked Sendable {
     /// The manual kill flow (spec §6d): confirm → signal → on `EPERM` the macOS
     /// admin prompt (**manual only**) → evidence line for every outcome.
     ///
+    /// The pid-reuse guard runs **three** times on this path: inside
+    /// `KillController` before `SIGTERM`, again before its escalated `SIGKILL`,
+    /// and a third time here — after the admin prompt, immediately before the
+    /// elevated `kill(1)` that runs as root (that window is human-scale; see
+    /// `KillController.guardPasses`).
+    ///
     /// Returns the status line to show for what happened, or `nil` when the
     /// user cancelled the confirmation — nothing was attempted in that case, so
     /// nothing is logged.
@@ -614,6 +620,17 @@ final class AppController: @unchecked Sendable {
                 summary: KillCopy.adminLogSummary(success: false, name: target.actor, pid: pid, signal: signal)
             )
             return KillCopy.adminCancelledLine(language: language)
+        }
+
+        // The elevated `kill(1)` runs as **root**, and the password dialog is a
+        // human-scale window — long enough for this pid to die and be recycled,
+        // which the first guard (before `SIGTERM`) cannot see. So the guard runs
+        // again here, immediately before the elevated command, and a failure
+        // signals nothing: spec §6d's pid-reuse rule has to hold on the one
+        // path that is stronger than the app itself.
+        guard KillController.guardPasses(pid: pid, expectedName: target.actor) else {
+            logKill(target, summary: KillCopy.adminRefusalLogSummary(name: target.actor, pid: pid))
+            return KillCopy.outcomeLine(.refusedNameMismatch, name: target.actor, language: language)
         }
 
         let elevated = await runAdminKill(pid: pid, signal: signal)
