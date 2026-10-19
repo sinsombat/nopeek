@@ -73,7 +73,9 @@ PLIST
 plutil -lint "$CONTENTS_DIR/Info.plist"
 
 echo "==> ad-hoc codesign"
-codesign --force --deep -s - "$APP_DIR"
+# No --deep: deprecated by Apple and never needed for a single-executable
+# bundle (there are no nested frameworks or helpers to sign).
+codesign --force -s - "$APP_DIR"
 codesign --verify --verbose=2 "$APP_DIR"
 
 echo "==> built $APP_DIR ($BUNDLE_ID, min macOS $MINIMUM_SYSTEM_VERSION, v$BUNDLE_VERSION)"

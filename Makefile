@@ -1,12 +1,12 @@
 # NoPeek — top-level build entry points (spec §9).
 #
-#   make test     run the PWCore unit test suite (swift-testing)
-#   make build    debug build (compile check, no bundle)
-#   make app      assemble + ad-hoc sign build/NoPeek.app
-#   make install  build, copy to ~/Applications/NoPeek.app, (re)load the LaunchAgent
-#   make clean    remove build artefacts
-#
-# `make uninstall` arrives with the packaging task (T22).
+#   make test       run the PWCore unit test suite (swift-testing)
+#   make build      debug build (compile check, no bundle)
+#   make app        assemble + ad-hoc sign build/NoPeek.app
+#   make install    build, copy to ~/Applications/NoPeek.app, (re)load the LaunchAgent
+#   make uninstall  stop + remove the app and LaunchAgent (keeps logs/config;
+#                   `./scripts/uninstall.sh --purge` removes those too)
+#   make clean      remove build artefacts
 
 SHELL := /bin/bash
 
@@ -21,7 +21,7 @@ else
 TEST_FLAGS :=
 endif
 
-.PHONY: all test build app install clean
+.PHONY: all test build app install uninstall clean
 
 all: app
 
@@ -36,6 +36,9 @@ app:
 
 install:
 	./scripts/install.sh
+
+uninstall:
+	./scripts/uninstall.sh
 
 clean:
 	rm -rf .build .build-release build
