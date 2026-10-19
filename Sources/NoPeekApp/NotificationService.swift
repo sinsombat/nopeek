@@ -91,29 +91,51 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// `AppController.start()`, before any event can produce a notification;
     /// calling it again with another language refreshes the action titles
     /// (T23's live language apply).
+    ///
+    /// The registration **merges**: the set already registered is read back,
+    /// this one category is replaced by identifier, everything else is left
+    /// alone — a blind `setNotificationCategories([category])` would clobber
+    /// any other category a future NoPeek build registers.
+    ///
+    /// The read is asynchronous and its callback is `@Sendable`, so only the
+    /// `String`s the objects are built from cross into it: the center is
+    /// re-fetched with `current()` there (the same object — this service only
+    /// ever talks to `current()`), and the actions are rebuilt inside.
     func registerAlertCategory(language: Language) {
         guard let center else { return }
 
-        let kill = UNNotificationAction(
-            identifier: Self.killActionID,
-            title: Strings.t("kill.button.kill", language),
-            // `.foreground`: the confirm dialog is the point of this action and
-            // needs the app in front of the user. `.destructive` because that
-            // is exactly what it is.
-            options: [.destructive, .foreground]
-        )
-        let showLocation = UNNotificationAction(
-            identifier: Self.showLocationActionID,
-            title: Strings.t("menu.event.reveal", language),
-            options: []
-        )
-        let category = UNNotificationCategory(
-            identifier: Self.alertCategoryID,
-            actions: [kill, showLocation],
-            intentIdentifiers: [],
-            options: []
-        )
-        center.setNotificationCategories([category])
+        let killID = Self.killActionID
+        let killTitle = Strings.t("kill.button.kill", language)
+        let revealID = Self.showLocationActionID
+        let revealTitle = Strings.t("menu.event.reveal", language)
+        let categoryID = Self.alertCategoryID
+
+        center.getNotificationCategories { existing in
+            let kill = UNNotificationAction(
+                identifier: killID,
+                title: killTitle,
+                // `.foreground`: the confirm dialog is the point of this
+                // action and needs the app in front of the user.
+                // `.destructive` because that is exactly what it is.
+                options: [.destructive, .foreground]
+            )
+            let showLocation = UNNotificationAction(
+                identifier: revealID,
+                title: revealTitle,
+                options: []
+            )
+            let category = UNNotificationCategory(
+                identifier: categoryID,
+                actions: [kill, showLocation],
+                intentIdentifiers: [],
+                options: []
+            )
+
+            // Read-merge-write: replace only this category, keep the rest.
+            var categories = existing.filter { $0.identifier != categoryID }
+            categories.insert(category)
+            UNUserNotificationCenter.current().setNotificationCategories(categories)
+        }
     }
 
     /// The `userInfo` a REMOTE/ORG notification carries so its actions know what

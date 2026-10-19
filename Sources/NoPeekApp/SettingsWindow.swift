@@ -30,7 +30,8 @@ import PWCore
 /// retention you asked for", and a half-edited form is not that. The app owns
 /// the log, so the actual purge is the `onPurge` hook (wired to the reader's
 /// serial queue, the `EvidenceLog`'s single owner) rather than a call from
-/// this window; the confirmation names the days used.
+/// this window; the confirmation comes back on the main actor with the true
+/// number of files the purge removed.
 ///
 /// **`เปิดไฟล์ config` stays** (spec §6c: for power users) and opens the same
 /// file the menu row opens.
@@ -86,10 +87,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - Hooks (wired by the app after construction)
 
-    /// `Purge now`: run the purge with this many days. The app routes it
+    /// `Purge now`: run the purge with this many days and report, on the main
+    /// actor, how many files it actually removed. The app routes the call
     /// through the reader's serial queue, the log's single owner (T8), so the
-    /// call returns before the deletion does.
-    var onPurge: (Int) -> Void = { _ in }
+    /// call returns before the deletion does — the report is the main hop
+    /// after it.
+    var onPurge: (_ days: Int, _ report: @escaping @MainActor (Int) -> Void) -> Void = { _, _ in }
 
     // MARK: - Views
 
@@ -252,17 +255,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     /// `Purge now` (spec §6c): the **saved** retention, reported with the days
-    /// it used. The purge itself belongs to the app — see `onPurge`; it is
-    /// best-effort by T8's design (deletion failures are silent), so the
-    /// confirmation names the request the user made, not a verified count of
-    /// deleted files.
+    /// it used. The purge itself belongs to the app — see `onPurge` — and
+    /// deletion is best-effort by T8's design (a file that refuses to go is
+    /// skipped), so the confirmation waits for the app's report and names the
+    /// true number of files that were removed, not a request.
     @objc private func purgeNow(_ sender: Any?) {
         let days = configStore.config.logRetentionDays
-        onPurge(days)
-        statusLabel?.stringValue = String(
-            format: Strings.t("settings.purge.done", language()),
-            String(days)
-        )
+        onPurge(days) { [weak self] removed in
+            guard let self else { return }
+            statusLabel?.stringValue = String(
+                format: Strings.t("settings.purge.done", language()),
+                String(removed), String(days)
+            )
+        }
     }
 
     /// `เปิดไฟล์ config` (spec §6c, power users): the menu row's behavior.

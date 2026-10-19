@@ -84,7 +84,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 
 | # | จับอะไร | สัญญาณ (source) | Attribution |
 |---|---|---|---|
-| A | แคปจอ (ScreenCaptureKit/จุดม่วง) | log stream: subsystem `com.apple.ScreenCaptureKit`; process `replayd`; process `ScreenCaptureApprovalUI`; process `screencapture`/`screencaptureui`; process `tccd` + `kTCCServiceScreenCapture` | ดึงชื่อ client app จากบรรทัด log ถ้ามี; ไม่มี → "ไม่ทราบผู้แคป" |
+| A | แคปจอ (ScreenCaptureKit/จุดม่วง) | log stream: subsystem `com.apple.ScreenCaptureKit`; process `replayd`; process `ScreenCaptureApprovalUI`; process `screencapture`/`screencaptureui` (ส่วน `tccd` + `kTCCServiceScreenCapture`: clause ใน predicate เก็บไว้แบบ defensive เท่านั้น; parser rule ไม่มีโดยเจตนา — เสี่ยง misattribution กับ HAL preflight ของ NoPeek เอง; probe ให้ 0 บรรทัดที่ใช้ได้) | ดึงชื่อ client app จากบรรทัด log ถ้ามี; ไม่มี → "ไม่ทราบผู้แคป" |
 | B | Remote control สด | `ProcessWatch` เทียบ watchlist (ดู §7) + log stream ของ `screensharingd` | ชื่อ process + path (path ได้เฉพาะ process ของ user ตัวเอง — root-owned agents อาจเห็นแต่ชื่อ) |
 | C | องค์กร (labeling layer ไม่ใช่ sensor) | ทุก `RawEvent` เอา `actor` + `actorPath` ไป match `orgPatterns` (§7) | reason ระบุ pattern ที่ match |
 | D | กล้อง | log stream: subsystem `com.apple.cameracapture` + `startRunning`/`stopRunning` (R21) | actor = แอปที่เปิดกล้อง (processImagePath basename) — attribution ตรงจาก log |

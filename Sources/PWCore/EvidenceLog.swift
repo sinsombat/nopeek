@@ -209,20 +209,31 @@ public final class EvidenceLog {
     /// `retentionDays` is only the value it was built with). `nil` — the
     /// default, and every pre-T23 call site — keeps the original semantics.
     ///
+    /// - Returns: how many files were actually removed. Deletion is
+    ///   best-effort (a file that refuses to go is skipped), so this counts
+    ///   successes only — the caller may report it as the true number deleted.
+    ///
     /// Called at startup (T24) before the gap check, so the gap check does not
     /// see files it is about to delete.
-    public func purgeOldFiles(keepingDays days: Int? = nil) {
+    @discardableResult
+    public func purgeOldFiles(keepingDays days: Int? = nil) -> Int {
         let calendar = Calendar.current
         let retained = max(days ?? retentionDays, 1)
         guard let cutoff = calendar.date(
             byAdding: .day,
             value: -(retained - 1),
             to: calendar.startOfDay(for: now())
-        ) else { return }
+        ) else { return 0 }
 
+        var removed = 0
         for file in logFiles() where file.day < cutoff {
-            try? fileManager.removeItem(at: file.url)
+            // Best-effort by design (T8): a failed removal is skipped, and
+            // not counted — the return value is what really went away.
+            if (try? fileManager.removeItem(at: file.url)) != nil {
+                removed += 1
+            }
         }
+        return removed
     }
 
     // MARK: - Range read

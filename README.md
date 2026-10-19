@@ -14,7 +14,7 @@ NoPeek is a menu-bar shield (no Dock icon, `LSUIElement`). It watches four obser
 
 | # | Channel | Signal source | Attribution |
 |---|---|---|---|
-| A | Screen capture (⌘⇧5, purple indicator, third-party capture) | macOS log stream: `com.apple.ScreenCaptureKit`, `replayd`, `ScreenCaptureApprovalUI`, `screencapture`/`screencaptureui`, `tccd` + `kTCCServiceScreenCapture` | client app name from the log line when available; otherwise "unknown capturer" |
+| A | Screen capture (⌘⇧5, purple indicator, third-party capture) | macOS log stream: `com.apple.ScreenCaptureKit`, `replayd`, `ScreenCaptureApprovalUI`, `screencapture`/`screencaptureui` | client app name from the log line when available; otherwise "unknown capturer" |
 | B | Live remote control | process table against the remote-control watchlist (`screensharingd`, `ARDAgent`, `TeamViewer`, `AnyDesk`, …) plus `screensharingd` log lines | process name + path (path only for your own processes) |
 | C | Org agent (labeling layer, not a sensor) | every event's actor + path is matched against `orgPatterns` (`/Library/ManageEngine/`, `dcondemand`, `PanGPS`, Tanium, …) | which pattern matched |
 | D | Camera | log stream subsystem `com.apple.cameracapture`, `AVCaptureSession startRunning`/`stopRunning` | the app that started the session (Photo Booth, Zoom, …) — direct from the log |
@@ -73,7 +73,7 @@ Killing is a response tool you drive; NoPeek never kills anything on its own unl
 1. A confirmation dialog shows the process name, its location (outermost `.app` where resolvable), and the pid. A **Force (SIGKILL)** checkbox is available.
 2. The corporate-policy warning is shown every time: killing an org agent may violate your company's policy.
 3. `SIGTERM` is sent, NoPeek waits up to 3 s, then escalates to `SIGKILL` if needed.
-4. **pid-reuse guard**: immediately before signalling — and again before any elevated retry — the process name is re-checked against the event. A pid that no longer matches is refused, not killed.
+4. **pid-reuse guard**: immediately before signalling — and again before any elevated retry — the process name is re-checked against the event, comparing the event's actor with the kernel's 16-character short process name (`p_comm`), so an actor whose name is longer than that can never match and the kill is refused rather than guessed at. A pid that no longer matches is refused, not killed.
 5. **EPERM → admin prompt** (manual only): if the process belongs to another user/root, NoPeek offers the standard macOS admin password box (via `osascript … with administrator privileges`) for that one attempt. Cancel and nothing happens; both outcomes are logged.
 6. Every attempt is written to the evidence log as a `process-kill` event (signal delivered / EPERM / cancelled / refused / loop-guard stop).
 
@@ -81,7 +81,7 @@ Killing is a response tool you drive; NoPeek never kills anything on its own unl
 
 - `"autoKillEnabled": false` by default. Turning it on kills only processes you listed yourself in `"autoKillNames"` — it is deliberately **not** fed by the watchlist.
 - **Your own processes only.** NoPeek runs as you; it cannot auto-kill root-owned processes and will never show an admin prompt from the auto path. Root processes can only be killed manually with the admin prompt above.
-- **Loop guard**: at most `"autoKillMaxPerHour"` (default 5) kills *per name per hour*. When the quota is hit, auto-kill stops for that name and notifies: *"auto-kill loop — something may be respawning it"*.
+- **Loop guard**: at most `"autoKillMaxPerHour"` (default 5) kills *per name per hour*. When the quota is hit, auto-kill stops for that name and notifies: *"auto-kill loop — something may be respawning it"*. The quota lives in memory only — relaunching NoPeek, or changing `autoKillMaxPerHour`, starts it over.
 - A killed process may come back — launchd or a system daemon can respawn it. The loop guard is there to stop you fighting the system.
 
 **Caveat, stated plainly:** NoPeek is not an EDR. Killing an org/IT agent on a managed Mac can break your employer's management or violate policy. Confirm dialogs exist for exactly that reason.
@@ -231,7 +231,7 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 
 | # | ช่องทาง | สัญญาณที่จับ | Attribution |
 |---|---|---|---|
-| A | แคปจอ (⌘⇧5, จุดม่วง, แอปอื่นแคป) | log stream ของ macOS: `com.apple.ScreenCaptureKit`, `replayd`, `ScreenCaptureApprovalUI`, `screencapture`/`screencaptureui`, `tccd` + `kTCCServiceScreenCapture` | ชื่อแอปจากบรรทัด log ถ้ามี; ไม่มี → "ไม่ทราบผู้แคป" |
+| A | แคปจอ (⌘⇧5, จุดม่วง, แอปอื่นแคป) | log stream ของ macOS: `com.apple.ScreenCaptureKit`, `replayd`, `ScreenCaptureApprovalUI`, `screencapture`/`screencaptureui` | ชื่อแอปจากบรรทัด log ถ้ามี; ไม่มี → "ไม่ทราบผู้แคป" |
 | B | ควบคุมระยะไกลสด | ตาราง process เทียบ watchlist (`screensharingd`, `ARDAgent`, TeamViewer, AnyDesk, …) + log ของ `screensharingd` | ชื่อ process + path (path ได้เฉพาะ process ของตัวเอง) |
 | C | agent องค์กร (ชั้นติดป้าย ไม่ใช่เซนเซอร์) | actor + path ของทุก event ถูกจับคู่กับ `orgPatterns` (`/Library/ManageEngine/`, `dcondemand`, `PanGPS`, Tanium, …) | ระบุว่า match pattern ไหน |
 | D | กล้อง | log stream subsystem `com.apple.cameracapture`, `AVCaptureSession startRunning`/`stopRunning` | แอปที่เปิด session (Photo Booth, Zoom, …) — ตรงจาก log |
@@ -290,7 +290,7 @@ notification ของระบบ (gap, auto-kill) อยู่นอก tier �
 1. กล่องยืนยันแสดงชื่อ process, ตำแหน่ง (`.app` ชั้นนอกสุดเท่าที่หาได้) และ pid พร้อม checkbox **Force (SIGKILL)**
 2. คำเตือนนโยบายบริษัทขึ้นทุกครั้ง: การฆ่า agent ขององค์กรอาจขัด policy ของบริษัท
 3. ส่ง `SIGTERM` รอสูงสุด 3 วินาที แล้วต่อด้วย `SIGKILL` ถ้าจำเป็น
-4. **pid-reuse guard**: ก่อนยิงสัญญาณ (และก่อนลองใหม่แบบยกสิทธิ์ทุกครั้ง) ชื่อ process ถูกตรวจซ้ำกับ event — pid ที่ไม่ตรงแล้วจะถูกปฏิเสธ ไม่ยิง
+4. **pid-reuse guard**: ก่อนยิงสัญญาณ (และก่อนลองใหม่แบบยกสิทธิ์ทุกครั้ง) ชื่อ process ถูกตรวจซ้ำกับ event โดยเทียบชื่อ actor กับชื่อสั้นของ kernel (`p_comm`) ที่ถูกตัดเหลือ 16 ตัวอักษร — actor ที่ชื่อยาวกว่านั้นจึง match ไม่ได้และถูกปฏิเสธแทนการเดา; pid ที่ไม่ตรงแล้วจะถูกปฏิเสธ ไม่ยิง
 5. **EPERM → ถามรหัส admin** (เฉพาะ manual): ถ้า process เป็นของ user อื่น/root NoPeek จะเสนอกล่องรหัส admin ของ macOS (`osascript … with administrator privileges`) เฉพาะครั้งนั้น กดยกเลิก = ไม่ทำอะไร และบันทึกทั้งสองทาง
 6. ทุกครั้งถูกบันทึกเป็น event `process-kill` ใน log (ส่งสัญญาณแล้ว / EPERM / ยกเลิก / ถูกปฏิเสธ / loop guard หยุด)
 
@@ -298,7 +298,7 @@ notification ของระบบ (gap, auto-kill) อยู่นอก tier �
 
 - `"autoKillEnabled": false` โดยค่าเริ่มต้น เปิดแล้วจะฆ่าเฉพาะชื่อที่คุณใส่เองใน `"autoKillNames"` — ตั้งใจไม่ผูกกับ watchlist อัตโนมัติ
 - **เฉพาะ process ฝั่ง user ตัวเอง** NoPeek รันด้วยสิทธิ์คุณ มันฆ่า process ของ root ไม่ได้ และจะไม่เด้งกล่อง admin จากทาง auto เด็ดขาด — root ทำได้เฉพาะ manual + admin ด้านบน
-- **Loop guard**: จำกัด `"autoKillMaxPerHour"` (ค่าเริ่มต้น 5) ครั้งต่อชื่อต่อชั่วโมง ครบโควตาจะหยุดฆ่าชื่อนั้น + แจ้ง *"auto-kill loop — มีอะไรรีสปอว์นอยู่"*
+- **Loop guard**: จำกัด `"autoKillMaxPerHour"` (ค่าเริ่มต้น 5) ครั้งต่อชื่อต่อชั่วโมง ครบโควตาจะหยุดฆ่าชื่อนั้น + แจ้ง *"auto-kill loop — มีอะไรรีสปอว์นอยู่"* โควตานี้อยู่ในหน่วยความจำเท่านั้น — เปิดแอปใหม่ หรือเปลี่ยน `autoKillMaxPerHour` จะเริ่มนับใหม่
 - process ที่ถูกฆ่าอาจกลับมาถูก launchd หรือ daemon ของระบบ respawn — loop guard มีไว้หยุดการสู้กับระบบแบบนั้น
 
 **พูดตรง ๆ:** NoPeek ไม่ใช่ EDR การฆ่า agent ขององค์กรบนเครื่องที่บริษัทดูแลอาจทำให้ระบบจัดการพังหรือขัดนโยบาย — กล่องยืนยันมีอยู่เพราะเหตุนี้

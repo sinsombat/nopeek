@@ -154,6 +154,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         button.image = image
         button.toolTip = tooltip
+        // Spec §6: the state colours on top of the per-state glyphs — red for
+        // a live observation, yellow while the reader is down. `nil` leaves
+        // normal and paused in the menu bar's own tint. `contentTintColor`
+        // applies because the images are templates.
+        button.contentTintColor = switch icon {
+        case .active: .systemRed
+        case .degraded: .systemYellow
+        case .normal, .paused: nil
+        }
         // Defensive fallback, as in the M0 skeleton: an empty status item
         // would be invisible, so a missing symbol degrades to the name.
         button.title = image == nil ? Strings.t("app.name", language) : ""
@@ -231,13 +240,20 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// Spec §6 `Test alert`: one fake notification per user-facing tier, so
     /// banner and sound can be verified without a real capture.
+    ///
+    /// Posted through the core `post`, deliberately **without** the
+    /// `nopeek-alert` category: a test notification names no process, so the
+    /// tier convenience would attach `Kill` / `ShowLocation` buttons that
+    /// resolve to a `nil` target and do nothing when pressed. The tier table's
+    /// sound rule is kept (ORG/REMOTE always sound).
     @objc func testAlert(_ sender: Any?) {
         for tier in [Tier.org, .remote, .normal] {
             let name = tier.rawValue.lowercased()
             controller.notifications.post(
                 title: Strings.t("notif.\(name).title", language),
                 body: String(format: Strings.t("notif.test.body", language), tier.rawValue),
-                tier: tier
+                threadID: NotificationService.threadID(for: tier),
+                sound: NotificationService.carriesAlertActions(tier) ? true : nil
             )
         }
     }

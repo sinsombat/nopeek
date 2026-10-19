@@ -490,9 +490,11 @@ public enum Strings {
         ],
         // Spec §6c's purge button, used with the retention that is *saved*.
         "settings.purge": [.th: "Purge now", .en: "Purge now"],
+        // Its confirmation: the true count of files the purge removed and the
+        // retention it used (both `%@`).
         "settings.purge.done": [
-            .th: "🧹 ลบ log ที่เกิน %@ วันแล้ว",
-            .en: "🧹 Purged everything past %@ days",
+            .th: "🧹 ลบไป %@ ไฟล์ที่เกิน %@ วันแล้ว",
+            .en: "🧹 Purged %@ file(s) past %@ days",
         ],
         // The five list areas, labelled by their config key (the file is what
         // a power user will read next to the window).

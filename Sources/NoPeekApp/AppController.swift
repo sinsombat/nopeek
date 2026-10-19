@@ -479,12 +479,15 @@ final class AppController: @unchecked Sendable {
         // Also last, for the same reason: `Purge now` (spec §6c) deletes inside
         // the log directory, which the reader's serial queue owns (T8's single
         // owner) — the same route the other log appends take. The window passes
-        // the retention saved in the config, never the half-edited field.
-        settingsWindow.onPurge = { [weak self] days in
+        // the retention saved in the config, never the half-edited field, and
+        // its confirmation waits for the count the purge really removed, sent
+        // back on the main actor (the Settings window is AppKit).
+        settingsWindow.onPurge = { [weak self] days, report in
             guard let self else { return }
             let reader = self.reader
             reader.performSerialized { [weak self] in
-                self?.evidenceLog.purgeOldFiles(keepingDays: days)
+                let removed = self?.evidenceLog.purgeOldFiles(keepingDays: days) ?? 0
+                Task { @MainActor in report(removed) }
             }
         }
 
