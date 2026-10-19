@@ -150,7 +150,7 @@ Each step shows waiting/✅/❌/timed-out, and the result is saved to `~/Library
 | `autoKillNames` | `[]` | process names auto-kill may kill — add them one by one |
 | `autoKillMaxPerHour` | `5` | auto-kill quota per name per hour (loop guard) |
 
-Built-in defaults (merged unless `replaceDefaultLists`): 23 org patterns (ManageEngine, `dcondemand`, `PanGPS`, GlobalProtect, CloudflareWARP, TeamViewer, AnyDesk, ScreenConnect, ConnectWise, Splashtop, SRService, RustDesk, LogMeIn, LMIGuardianSvc, GoToAssist, AteraAgent, `winagent`, `dwagent`, KaseyaAgent, AgentMon, ZohoAssist, TaniumClient, Tanium) · 12 remote-control names (`screensharingd`, `ARDAgent`, `RemoteManagement`, `remoting_host`, AnyDesk, TeamViewer, ScreenConnect, SRService, Splashtop, `rustdesk`, `dwagent`, `winagent`) · 3 noise names (`WindowManager`, `Dock`, `ControlCenter`). `allowlist` starts empty.
+Built-in defaults (merged unless `replaceDefaultLists`): 23 org patterns (ManageEngine, `dcondemand`, `PanGPS`, GlobalProtect, CloudflareWARP, TeamViewer, AnyDesk, ScreenConnect, ConnectWise, Splashtop, SRService, RustDesk, LogMeIn, LMIGuardianSvc, GoToAssist, AteraAgent, `winagent`, `dwagent`, KaseyaAgent, AgentMon, ZohoAssist, TaniumClient, Tanium) · 11 remote-control names (`screensharingd`, `ARDAgent`, `remoting_host`, AnyDesk, TeamViewer, ScreenConnect, SRService, Splashtop, `rustdesk`, `dwagent`, `winagent`) · 3 noise names (`WindowManager`, `Dock`, `ControlCenter`). `allowlist` starts empty.
 
 ## Where NoPeek's files live
 
@@ -367,7 +367,7 @@ notification ของระบบ (gap, auto-kill) อยู่นอก tier �
 | `autoKillNames` | `[]` | ชื่อ process ที่ auto-kill ฆ่าได้ — ต้องใส่เองทีละตัว |
 | `autoKillMaxPerHour` | `5` | โควตา auto-kill ต่อชื่อต่อชั่วโมง (loop guard) |
 
-ค่า default ที่ฝังมา (union กับไฟล์คุณ เว้นแต่ `replaceDefaultLists`): org 23 pattern (ManageEngine, `dcondemand`, `PanGPS`, GlobalProtect, CloudflareWARP, TeamViewer, AnyDesk, ScreenConnect, ConnectWise, Splashtop, SRService, RustDesk, LogMeIn, LMIGuardianSvc, GoToAssist, AteraAgent, `winagent`, `dwagent`, KaseyaAgent, AgentMon, ZohoAssist, TaniumClient, Tanium) · รีโมท 12 ชื่อ (`screensharingd`, `ARDAgent`, `RemoteManagement`, `remoting_host`, AnyDesk, TeamViewer, ScreenConnect, SRService, Splashtop, `rustdesk`, `dwagent`, `winagent`) · noise 3 ชื่อ (`WindowManager`, `Dock`, `ControlCenter`) ส่วน `allowlist` เริ่มว่าง
+ค่า default ที่ฝังมา (union กับไฟล์คุณ เว้นแต่ `replaceDefaultLists`): org 23 pattern (ManageEngine, `dcondemand`, `PanGPS`, GlobalProtect, CloudflareWARP, TeamViewer, AnyDesk, ScreenConnect, ConnectWise, Splashtop, SRService, RustDesk, LogMeIn, LMIGuardianSvc, GoToAssist, AteraAgent, `winagent`, `dwagent`, KaseyaAgent, AgentMon, ZohoAssist, TaniumClient, Tanium) · รีโมท 11 ชื่อ (`screensharingd`, `ARDAgent`, `remoting_host`, AnyDesk, TeamViewer, ScreenConnect, SRService, Splashtop, `rustdesk`, `dwagent`, `winagent`) · noise 3 ชื่อ (`WindowManager`, `Dock`, `ControlCenter`) ส่วน `allowlist` เริ่มว่าง
 
 ## ไฟล์ของ NoPeek อยู่ที่ไหน
 

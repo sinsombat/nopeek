@@ -203,7 +203,7 @@ public final class ProcessWatch {
 
     /// The lowered watchlist the cached verdicts belong to. A config reload
     /// (T17) changes it, and the whole cache is dropped when it differs —
-    /// comparing 12 short strings once per tick is far cheaper than re-scanning
+    /// comparing a handful of short strings once per tick is far cheaper than re-scanning
     /// the table, and it keeps a stale watchlist from answering for a new one.
     private var verdictWatchlist: [String] = []
 

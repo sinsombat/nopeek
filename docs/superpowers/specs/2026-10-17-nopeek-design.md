@@ -205,7 +205,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 
 - `orgPatterns` (match แบบ substring บนชื่อ process หรือ path — ครอบคลุม RMM/remote/capture-capable agents ที่พบบ่อย):
   `"/Library/ManageEngine/"`, `"dcondemand"`, `"PanGPS"`, `"GlobalProtect"`, `"CloudflareWARP"`, `"TeamViewer"`, `"AnyDesk"`, `"ScreenConnect"`, `"ConnectWise"`, `"Splashtop"`, `"SRService"`, `"RustDesk"`, `"LogMeIn"`, `"LMIGuardianSvc"`, `"GoToAssist"`, `"AteraAgent"`, `"winagent"`, `"dwagent"`, `"KaseyaAgent"`, `"AgentMon"`, `"ZohoAssist"`, `"TaniumClient"`, `"Tanium"`
-- `remoteControl` watchlist (process name): `"screensharingd"`, `"ARDAgent"`, `"RemoteManagement"`, `"remoting_host"`, `"AnyDesk"`, `"TeamViewer"`, `"ScreenConnect"`, `"SRService"`, `"Splashtop"`, `"rustdesk"`, `"dwagent"`, `"winagent"`
+- `remoteControl` watchlist (process name): `"screensharingd"`, `"ARDAgent"`, `"remoting_host"`, `"AnyDesk"`, `"TeamViewer"`, `"ScreenConnect"`, `"SRService"`, `"Splashtop"`, `"rustdesk"`, `"dwagent"`, `"winagent"` — **ไม่มี `"RemoteManagement"`** (R27): macOS เปิดฝูง RemoteManagement framework ของตัวเองเป็นระยะ (`remotemanagementd`, `RemoteManagementAgent`, ~19 `…Subscriber` XPC) ซึ่ง match ได้ทั้งทางชื่อและ path ทำให้เกิด REMOTE หลอก ~21 event ต่อการ spawn หนึ่งครั้ง; สัญญาณจริงยังอยู่ครบ (`screensharingd`, `ARDAgent`)
 - `systemNoise`: `"WindowManager"`, `"Dock"`, `"ControlCenter"`
 - `allowlist`: ว่าง (user เพิ่มเองผ่านเมนู) — entry เป็น path prefix หรือชื่อ process
 - `autoKillEnabled` (default `false`) / `autoKillNames` (ว่าง — ต้องใส่ชื่อ process เองทีละตัว) / `autoKillMaxPerHour` (default 5) — auto-kill เฉพาะ process ฝั่ง user + loop guard (§6d); ปรับได้จาก Settings window

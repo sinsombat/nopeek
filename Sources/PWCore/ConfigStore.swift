@@ -116,8 +116,18 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
     ]
 
     /// Remote-control process names (spec §7 watchlist for `ProcessWatch`).
+    ///
+    /// `"RemoteManagement"` is deliberately **absent** (ruling R27): macOS
+    /// periodically spawns Apple's own device-management fleet —
+    /// `remotemanagementd`, `RemoteManagementAgent` (kernel name truncated to
+    /// the 16-char `RemoteManagement`) and ~19 `…Subscriber` XPC services under
+    /// `/System/Library/PrivateFrameworks/RemoteManagement.framework/` — and a
+    /// case-insensitive substring match over name *and* path turned a single
+    /// spawn into ~21 REMOTE events. The genuine remote-access signals stay:
+    /// `screensharingd` (Screen Sharing daemon/listener) and `ARDAgent`
+    /// (Remote Management agent app), both matched by their own names.
     public static let defaultRemoteControl: [String] = [
-        "screensharingd", "ARDAgent", "RemoteManagement", "remoting_host",
+        "screensharingd", "ARDAgent", "remoting_host",
         "AnyDesk", "TeamViewer", "ScreenConnect", "SRService", "Splashtop",
         "rustdesk", "dwagent", "winagent",
     ]

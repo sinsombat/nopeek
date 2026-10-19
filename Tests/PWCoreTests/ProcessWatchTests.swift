@@ -118,19 +118,19 @@ import PWCore
     }
 
     @Test func testPathOnlyMatchEmitsProcessNameAsActor() {
-        // A watchlist entry that only matches through the path (the default
-        // list carries `RemoteManagement`) still reports the *process* name,
-        // which is what the user sees in the evidence log.
+        // A watchlist entry (here a user-added one) that only matches through
+        // the path still reports the *process* name, which is what the user
+        // sees in the evidence log.
         let info = proc(
             9,
-            "ARDAgent",
-            "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent"
+            "helper",
+            "/Applications/CustomTool.app/Contents/MacOS/helper"
         )
-        let watch = watch(names: { ["RemoteManagement"] }, listing: Listing([info]))
+        let watch = watch(names: { ["CustomTool"] }, listing: Listing([info]))
 
         let events = watch.tick()
         #expect(events.count == 1)
-        #expect(events.first?.actor == "ARDAgent")
+        #expect(events.first?.actor == "helper")
         #expect(events.first?.actorPath == info.path)
     }
 
@@ -296,9 +296,9 @@ import PWCore
             ("TeamViewer_Service", nil, ["teamviewer"], true),
             // path-only hit: the actor name itself matches nothing
             (
-                "ARDAgent",
-                "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent",
-                ["RemoteManagement"],
+                "helper",
+                "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/helper",
+                ["ARDAgent"],
                 true
             ),
             ("helper", "/Applications/AnyDesk.app/Contents/MacOS/helper", ["AnyDesk"], true),
@@ -335,11 +335,114 @@ import PWCore
         }
     }
 
+    // MARK: - Apple's RemoteManagement fleet (ruling R27)
+
+    @Test func testRemoteManagementFleetProducesNoEvents() {
+        // macOS 27 periodically spins up the RemoteManagement framework fleet —
+        // observed live three times in one day (21 processes per spawn). It
+        // must not read as remote control. It used to: `remotemanagementd` and
+        // `RemoteManagementAgent` (kernel name truncated to the 16-char
+        // `RemoteManagement`) matched the old watchlist entry by name, and the
+        // 19 `…Subscriber` XPC services matched it through the shared
+        // framework path — 21 REMOTE notifications per spawn (ruling R27).
+        //
+        // The fixture is the fleet exactly as the evidence log recorded it:
+        // 16-char-truncated kernel names plus the full framework paths.
+        let fleet = Self.remoteManagementFleet()
+        let fleetWatch = watch(
+            names: { NoPeekConfig.defaultRemoteControl },
+            listing: Listing(fleet)
+        )
+        #expect(fleetWatch.tick().isEmpty, "the RemoteManagement fleet must not fire under the default watchlist")
+
+        // The symptom was a *tier*, so pin that too: nothing in the fleet may
+        // classify as REMOTE, whatever a future default list does.
+        let classifier = Classifier(remote: NoPeekConfig.defaultRemoteControl)
+        for proc in fleet {
+            let tier = classifier.classify(Self.remoteControlEvent(proc)).tier
+            #expect(tier != .remote, "\(proc.name) tiered \(tier.rawValue)")
+        }
+
+        // And the surgical removal keeps the genuine signals: the Remote
+        // Management *agent* app and the Screen Sharing daemon still fire and
+        // still tier REMOTE.
+        let genuine = [
+            proc(1, "ARDAgent", "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent"),
+            proc(2, "screensharingd", "/System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/MacOS/screensharingd"),
+        ]
+        let genuineWatch = watch(
+            names: { NoPeekConfig.defaultRemoteControl },
+            listing: Listing(genuine)
+        )
+        #expect(genuineWatch.tick().map(\.actor).sorted() == ["ARDAgent", "screensharingd"])
+        for proc in genuine {
+            #expect(classifier.classify(Self.remoteControlEvent(proc)).tier == .remote)
+        }
+    }
+
+    /// One `remote-control-process` raw event for a fixture process — what the
+    /// watch would have produced for it.
+    private static func remoteControlEvent(_ proc: ProcInfo) -> RawEvent {
+        RawEvent(
+            ts: Self.fixedNow,
+            source: .processwatch,
+            kind: .remoteControlProcess,
+            actor: proc.name,
+            actorPath: proc.path,
+            pid: proc.pid
+        )
+    }
+
+    /// The RemoteManagement fleet as the evidence log recorded a real spawn:
+    /// the framework's daemon and agent (names truncated to `MAXCOMLEN` = 16
+    /// by the kernel, which is why `RemoteManagementAgent` arrived as
+    /// `RemoteManagement`) plus the subscriber XPC services it launches, whose
+    /// only shared signal is the `/System/Library/PrivateFrameworks/
+    /// RemoteManagement.framework/` prefix in their paths.
+    private static func remoteManagementFleet() -> [ProcInfo] {
+        let framework = "/System/Library/PrivateFrameworks/RemoteManagement.framework"
+        let subscribers = [
+            "ExtensibleSSOSubscriber", "AssetCacheSubscriber",
+            "ManagedConfigurationFilesSubscriber", "ManagementTestSubscriber",
+            "ManagedSettingsSubscriber", "NetworkExtensionSubscriber",
+            "ASConfigurationSubscriber", "ManagedAppsSubscriber",
+            "DeviceConfigurationSubscriber", "MigrationSubscriber",
+            "SoftwareUpdateSubscriber", "ManagedPreferencesSubscriber",
+            "AccountSubscriber", "DiskManagementSubscriber",
+            "PasscodeSettingsSubscriber", "LegacyProfilesSubscriber",
+            "ScreenSharingSubscriber", "InteractiveLegacyProfilesSubscriber",
+            "SecuritySubscriber",
+        ]
+
+        var procs: [ProcInfo] = []
+        var pid: Int32 = 5000
+        for shortName in ["remotemanagement", "RemoteManagement"] {
+            // Kernel-truncated names, exactly as `SystemProcesses.list` reports
+            // them: `remotemanagementd` -> `remotemanagement`,
+            // `RemoteManagementAgent` -> `RemoteManagement`.
+            let path = shortName == "remotemanagement"
+                ? "\(framework)/remotemanagementd"
+                : "\(framework)/RemoteManagementAgent"
+            procs.append(ProcInfo(pid: pid, name: shortName, path: path))
+            pid += 1
+        }
+        for subscriber in subscribers {
+            let name = String(subscriber.prefix(16)) // MAXCOMLEN
+            procs.append(ProcInfo(
+                pid: pid,
+                name: name,
+                path: "\(framework)/XPCServices/\(subscriber).xpc/Contents/MacOS/\(subscriber)"
+            ))
+            pid += 1
+        }
+        return procs
+    }
+
     // MARK: - Budget
 
     @Test func testMatchingStaysUnderBudgetForAFullProcessTable() {
         // The idle-CPU acceptance (app + `log` child < 1 %) is dominated by
-        // this poll: ~600 processes × the 12-entry watchlist, every 3 s. The
+        // this poll: ~600 processes × the 11-entry watchlist, every 3 s. The
         // budget is 2 ms per *warm* tick — the steady state the acceptance
         // measures, where the memoised verdicts answer for every process that
         // has not changed. The cold first tick pays the full substring scan

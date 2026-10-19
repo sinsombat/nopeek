@@ -113,11 +113,13 @@ import PWCore
             "KaseyaAgent", "AgentMon", "ZohoAssist", "TaniumClient", "Tanium",
         ])
 
-        // Remote-control watchlist (spec §7).
-        #expect(NoPeekConfig.defaultRemoteControl.count == 12)
+        // Remote-control watchlist (spec §7). `RemoteManagement` is absent by
+        // ruling R27 — see `NoPeekConfig.defaultRemoteControl` and
+        // `ProcessWatchTests.testRemoteManagementFleetProducesNoEvents`.
+        #expect(NoPeekConfig.defaultRemoteControl.count == 11)
         #expect(NoPeekConfig.defaultRemoteControl.contains("screensharingd"))
         #expect(NoPeekConfig.defaultRemoteControl == [
-            "screensharingd", "ARDAgent", "RemoteManagement", "remoting_host",
+            "screensharingd", "ARDAgent", "remoting_host",
             "AnyDesk", "TeamViewer", "ScreenConnect", "SRService", "Splashtop",
             "rustdesk", "dwagent", "winagent",
         ])
@@ -148,7 +150,7 @@ import PWCore
         #expect(org.filter { $0 == "CustomAgent" }.count == 1)
 
         let remote = config.effectiveRemoteControl
-        #expect(remote.count == 13) // 12 defaults + 1 unique custom
+        #expect(remote.count == 12) // 11 defaults + 1 unique custom
         #expect(remote.first == "screensharingd")
         #expect(remote.last == "CustomRemote")
         #expect(remote.filter { $0 == "winagent" }.count == 1)
