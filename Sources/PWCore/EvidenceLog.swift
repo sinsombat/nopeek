@@ -77,8 +77,8 @@ public final class EvidenceLog {
     /// Appends a lifecycle event of the app itself (`monitor-started`,
     /// `monitor-degraded`, `monitor-recovered`, `monitor-gap`,
     /// `config-reloaded`, `calibration-result`, `checkup-run`, `export-created`,
-    /// `heartbeat` — spec §8): `ts` is the injected clock and `source` is
-    /// `.system`.
+    /// `process-kill`, `heartbeat` — spec §8): `ts` is the injected clock and
+    /// `source` is `.system`.
     ///
     /// Lifecycle lines carry tier `.systemNoise` and reason `"lifecycle"`.
     /// Neither is in spec §5's tier table (the table's tiers describe observed
@@ -88,8 +88,20 @@ public final class EvidenceLog {
     /// notification. `monitor-gap` is the exception in spirit — T21 notifies
     /// for it directly, bypassing the tier pipeline — but its log line still
     /// reads as system chatter, which is what it is.
-    public func appendRaw(kind: EventKind, actor: String = "nopeek") {
-        let raw = RawEvent(ts: now(), source: .system, kind: kind, actor: actor)
+    ///
+    /// `rawSummary` is the outcome of a kill (`process-kill`, spec §6d) — the
+    /// signal that was delivered, the EPERM, the elevation result, the guard
+    /// halt. `actor` is the process that was killed, so the line names both the
+    /// subject and the outcome. Every other lifecycle event leaves it `nil`,
+    /// which the encoder then omits (the spec §8 line shape is unchanged).
+    public func appendRaw(kind: EventKind, actor: String = "nopeek", rawSummary: String? = nil) {
+        let raw = RawEvent(
+            ts: now(),
+            source: .system,
+            kind: kind,
+            actor: actor,
+            rawSummary: rawSummary
+        )
         append(ClassifiedEvent(event: raw, tier: .systemNoise, reason: "lifecycle"))
     }
 

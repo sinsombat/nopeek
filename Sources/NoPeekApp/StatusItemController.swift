@@ -103,9 +103,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func rebuildMenu() {
         guard let menu = statusItem?.menu else { return }
+        // One sample of the tray feeds both the state and the per-row actions,
+        // so `state.eventRows[i]` and `events[i]` are always the same event.
+        let events = controller.recentEvents
         notificationWarningItem = menuBuilder.populate(
             menu,
-            with: currentState(now: Date()),
+            with: currentState(events: events, now: Date()),
+            events: events,
             language: language,
             target: self
         )
@@ -117,9 +121,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         Language(rawValue: controller.configStore.config.language) ?? Strings.defaultLanguage
     }
 
-    private func currentState(now: Date) -> MenuState {
+    private func currentState(events: [ClassifiedEvent], now: Date) -> MenuState {
         var state = MenuStateBuilder(language: language).state(
-            recentEvents: controller.recentEvents,
+            recentEvents: events,
             readerState: controller.logStreamState,
             paused: controller.isPaused,
             gap: controller.latestGap,
@@ -200,6 +204,29 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         } catch {
             presentConfigError()
         }
+    }
+
+    /// Spec §6d `Kill` on a REMOTE/ORG event row: the confirm dialog and, on
+    /// EPERM, the macOS admin prompt — the whole manual flow lives in
+    /// `AppController.confirmAndKill`. A cancelled dialog returns `nil` and
+    /// changes nothing here.
+    @objc func killRow(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? KillTarget else { return }
+        Task { @MainActor in
+            if let message = await controller.confirmAndKill(target) {
+                showConfirmation(message)
+            }
+            // The killed process may have been holding the "active" icon.
+            updateIcon()
+        }
+    }
+
+    /// Spec §6d `เปิดตำแหน่ง`: reveal the process's bundle (or executable) in
+    /// Finder. A row without a path or pid never offers this, so a miss here is
+    /// an honest no-op.
+    @objc func revealRow(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? KillTarget else { return }
+        ProcessLocation.openInFinder(for: target)
     }
 
     /// Spec §6 `Test alert`: one fake notification per user-facing tier, so

@@ -126,6 +126,23 @@ final class AppController: @unchecked Sendable {
     /// window and views are only created by `show()`.
     @MainActor let exportPanel: ExportPanelController
 
+    // MARK: - Kill (T21, spec §6d)
+
+    /// The signal engine (stateless): the pid-reuse guard, `SIGTERM` → wait →
+    /// `SIGKILL`. Manual kills and the auto-kill hook both go through it.
+    private let killController: KillController
+
+    /// The auto-kill loop guard (spec §6d): a rolling per-name quota, so a
+    /// process something respawns is not killed forever. Reachable only from the
+    /// reader's serial queue — see `autoKillIfRequested(_:)`.
+    private let autoKillEngine: AutoKillEngine
+
+    /// Serial queue for kill attempts. `KillController` blocks for up to its
+    /// three-second wait and the admin path waits for a human, neither of which
+    /// may happen on the main thread (the dialog would freeze) nor on the
+    /// reader's queue (every log line and poll behind it would stall).
+    private let killQueue = DispatchQueue(label: "com.sinsombat.nopeek.kill")
+
     /// The routing pipeline (T11). Built on first use — it captures `self` —
     /// from `start()` on the main thread, before any callback can touch it.
     private(set) lazy var pipeline: Pipeline = Pipeline(
@@ -292,6 +309,13 @@ final class AppController: @unchecked Sendable {
         self.exporter = exporter
         self.exportPanel = ExportPanelController(exporter: exporter, language: language)
 
+        // The kill engine and the auto-kill loop guard (T21, spec §6d). The
+        // engine is stateless; the guard's quota is the config value at launch
+        // (T23's live apply rebuilds it when `autoKillMaxPerHour` changes — the
+        // engine takes the quota once, by its pinned interface).
+        self.killController = KillController()
+        self.autoKillEngine = AutoKillEngine(maxPerHour: configStore.config.autoKillMaxPerHour)
+
         // Wired last, when every stored property exists: the completion handler
         // is what persists the summary and records the `calibration-result`
         // lifecycle line.
@@ -326,12 +350,26 @@ final class AppController: @unchecked Sendable {
                 self?.evidenceLog.appendRaw(kind: .exportCreated)
             }
         }
+
+        // Also last, for the same reason: the notification actions are the app's
+        // own (`NotificationService.Action`), and this is the type that owns the
+        // kill flow and the reveal (T21, spec §6). The delegate already hops to
+        // the main actor.
+        notifications.onAction = { [weak self] action in
+            Task { await self?.handleNotificationAction(action) }
+        }
     }
 
     // MARK: - Life cycle
 
     /// Records the boot and starts watching (spec §3: every boot leaves a
     /// `monitor-started` line). Idempotent.
+    ///
+    /// Main actor: the bootstrap path (`applicationDidFinishLaunching`) is, and
+    /// T21's alert-category registration is a `UNUserNotificationCenter` call
+    /// like the permission request next to it. Everything scheduled from here —
+    /// the reader, the two pollers — runs on its own queue as before.
+    @MainActor
     func start() {
         let shouldStart = uiLock.withLock { () -> Bool in
             guard !started else { return false }
@@ -341,6 +379,10 @@ final class AppController: @unchecked Sendable {
         guard shouldStart else { return }
 
         evidenceLog.appendRaw(kind: .monitorStarted)
+        // Spec §6: the alert actions (`Kill` / `เปิดตำแหน่ง`) must exist before
+        // the first REMOTE/ORG notification is posted, or a notification that
+        // arrives would carry no buttons.
+        notifications.registerAlertCategory(language: language)
         reader.start()
         startProcessWatch()
         startMicWatch()
@@ -351,11 +393,9 @@ final class AppController: @unchecked Sendable {
         // leaves the gate open rather than "calibrating" the machine by
         // existing. The check runs exactly once per launch (here), so an
         // unanswered wizard comes back on the *next* launch — it never re-opens
-        // in a loop inside one session. `start()` is the bootstrap path
-        // (main.swift's `applicationDidFinishLaunching`), which is also the one
-        // thread a window may be opened from.
+        // in a loop inside one session.
         if !hasPassedCalibration {
-            MainActor.assumeIsolated { startCalibration() }
+            startCalibration()
         }
     }
 
@@ -528,6 +568,108 @@ final class AppController: @unchecked Sendable {
         exportPanel.show()
     }
 
+    // MARK: - Kill (T21, spec §6d)
+
+    /// The configured UI language (spec §10), read live.
+    private var language: Language {
+        Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage
+    }
+
+    /// The manual kill flow (spec §6d): confirm → signal → on `EPERM` the macOS
+    /// admin prompt (**manual only**) → evidence line for every outcome.
+    ///
+    /// Returns the status line to show for what happened, or `nil` when the
+    /// user cancelled the confirmation — nothing was attempted in that case, so
+    /// nothing is logged.
+    ///
+    /// Main actor because both dialogs are, and because this is called from the
+    /// tray rows, the notification action and (T22) the History window; the
+    /// signalling itself runs on `killQueue`, so the UI never blocks.
+    @MainActor
+    func confirmAndKill(_ target: KillTarget) async -> String? {
+        // Never NoPeek's own pid (T21 global constraint): menu-bar apps are
+        // matched by name like anything else, and killing itself would end the
+        // monitoring session it is reporting about.
+        guard target.pid != getpid() else {
+            return Strings.t("kill.done.self", language)
+        }
+        guard let pid = target.pid, pid > 0 else { return nil }
+        // The spec §6d confirmation is mandatory for every manual kill.
+        guard let force = KillConfirmDialog.present(target: target, language: language) else {
+            return nil
+        }
+
+        let outcome = await runKill(pid: pid, name: target.actor, force: force)
+        let signal = force ? SIGKILL : SIGTERM
+        logKill(target, summary: KillCopy.logSummary(outcome, name: target.actor, pid: pid, initiator: .manual))
+
+        guard outcome == .noPermission else {
+            return KillCopy.outcomeLine(outcome, name: target.actor, language: language)
+        }
+
+        // EPERM → the system's admin prompt, this time only (spec §6d).
+        guard KillConfirmDialog.presentAdminPrompt(language: language) else {
+            logKill(
+                target,
+                summary: KillCopy.adminLogSummary(success: false, name: target.actor, pid: pid, signal: signal)
+            )
+            return KillCopy.adminCancelledLine(language: language)
+        }
+
+        let elevated = await runAdminKill(pid: pid, signal: signal)
+        logKill(
+            target,
+            summary: KillCopy.adminLogSummary(success: elevated, name: target.actor, pid: pid, signal: signal)
+        )
+        return KillCopy.adminResultLine(success: elevated, name: target.actor, language: language)
+    }
+
+    /// One attempt on the kill queue, handed back to the caller's actor.
+    private func runKill(pid: Int32, name: String, force: Bool) async -> KillOutcome {
+        let controller = killController
+        return await withCheckedContinuation { continuation in
+            killQueue.async {
+                continuation.resume(returning: controller.kill(pid: pid, expectedName: name, force: force))
+            }
+        }
+    }
+
+    /// The elevated retry: `osascript … with administrator privileges` on the
+    /// kill queue, because it blocks on the system dialog and the `kill(1)` it
+    /// starts. `true` only when that command exited 0.
+    private func runAdminKill(pid: Int32, signal: Int32) async -> Bool {
+        await withCheckedContinuation { continuation in
+            killQueue.async {
+                continuation.resume(returning: AdminKiller.killWithPrivileges(pid: pid, signal: signal))
+            }
+        }
+    }
+
+    /// Appends the spec §8 `process-kill` line — on the reader's serial queue,
+    /// the evidence log's single owner (T8's contract).
+    private func logKill(_ target: KillTarget, summary: String) {
+        let reader = self.reader
+        reader.performSerialized { [weak self] in
+            self?.evidenceLog.appendRaw(kind: .processKill, actor: target.actor, rawSummary: summary)
+        }
+    }
+
+    // MARK: - Notification actions (T21, spec §6)
+
+    /// Runs one notification action. Main actor: both paths are interaction —
+    /// the confirm dialog, or a Finder reveal.
+    @MainActor
+    private func handleNotificationAction(_ action: NotificationService.Action) async {
+        switch action {
+        case .kill(let target):
+            // The same confirmed flow as a tray row: a notification button is a
+            // shortcut to the dialog, never a way around it (spec §6d).
+            _ = await confirmAndKill(target)
+        case .showLocation(let target):
+            ProcessLocation.openInFinder(for: target)
+        }
+    }
+
     // MARK: - Event funnel
 
     /// Routes one observed event to every consumer: the pipeline (classify →
@@ -578,19 +720,45 @@ final class AppController: @unchecked Sendable {
     /// Posts the tier's notification on the main actor (`NotificationService`
     /// is `@MainActor`). Copy comes from `Strings` in the configured language
     /// (spec §6/§10) — title and body per tier, with actor + kind in the body —
-    /// and the thread id groups per tier (R10).
+    /// and the thread id groups per tier (R10). The three identity fields travel
+    /// in `userInfo`, which is what the T21 actions (`Kill` / `เปิดตำแหน่ง`)
+    /// read back.
     private func postNotification(for event: ClassifiedEvent) {
         let language = Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage
         guard let copy = Strings.notificationCopy(for: event, language: language) else { return }
 
         let tier = event.tier
         let notifications = self.notifications
+        let userInfo = NotificationService.eventUserInfo(
+            actor: event.event.actor,
+            actorPath: event.event.actorPath,
+            pid: event.event.pid
+        )
 
         Task { @MainActor in
             notifications.post(
                 title: copy.title,
                 body: copy.body,
-                threadID: NotificationService.threadID(for: tier)
+                threadID: NotificationService.threadID(for: tier),
+                categoryID: NotificationService.carriesAlertActions(tier)
+                    ? NotificationService.alertCategoryID
+                    : nil,
+                userInfo: userInfo
+            )
+        }
+    }
+
+    /// Posts one already-composed notification (T21's auto-kill notices, which
+    /// are the app's own actions rather than an observation and so have no
+    /// `Tier`): grouped under the system thread like the other monitor-health
+    /// notifications (F3).
+    private func postNotification(_ copy: NotificationCopy) {
+        let notifications = self.notifications
+        Task { @MainActor in
+            notifications.post(
+                title: copy.title,
+                body: copy.body,
+                threadID: NotificationService.systemThreadID
             )
         }
     }
@@ -672,16 +840,89 @@ final class AppController: @unchecked Sendable {
                 guard let self else { return }
                 // `tick()` reads the watchlist from the live config, lists
                 // the process table once, and returns one event per watched
-                // name that just appeared. From here on the events are
-                // routed exactly like log-stream ones (classify → log →
-                // notify / banner / tray, and offered to a calibration run).
+                // name that just appeared. Each event gets the T21 auto-kill
+                // hook first — the response — and is then routed exactly like
+                // a log-stream one (classify → log → notify / banner / tray,
+                // and offered to a calibration run): the observation is the
+                // evidence log's business even when the process just died.
                 for raw in self.processWatch.tick() {
+                    self.autoKillIfRequested(raw)
                     self.route(raw)
                 }
             }
         }
         processWatchTimer = timer
         timer.resume()
+    }
+
+    // MARK: - Auto-kill (T21, spec §6d)
+
+    /// The auto-kill hook: runs **before** the event reaches the pipeline, on
+    /// the reader's serial queue (the engine's single owner, T13's contract).
+    ///
+    /// Every gate is deliberate:
+    /// - `autoKillEnabled` — off unless the user turned it on (spec §7 default
+    ///   `false`);
+    /// - the actor must be in `autoKillNames`, matched case-insensitively and
+    ///   **exactly** (never as a substring — this decides who dies);
+    /// - the event must classify **REMOTE** (plan T21): an org-patterned actor
+    ///   stays manual-only, where the confirm dialog asks the user, and a name
+    ///   that is not on the remote watchlist produces no event to begin with
+    ///   (spec §6d "ต้องใส่ชื่อเองทีละตัว"; `remoteControlExtra` is how a test
+    ///   process joins the watchlist — ruling F5);
+    /// - never NoPeek's own pid;
+    /// - the loop guard's quota: one `process-kill` line and one notification
+    ///   when a name's hour fills up, then silence until the window slides.
+    ///
+    /// `EPERM` is a plain outcome here: auto-kill **never** raises the admin
+    /// prompt (spec §6d), so the line says so and the user gets one notice.
+    /// The event is forwarded to the pipeline either way.
+    private func autoKillIfRequested(_ raw: RawEvent) {
+        let config = configStore.config
+        guard config.autoKillEnabled, raw.kind == .remoteControlProcess else { return }
+        guard let pid = raw.pid, pid > 0, pid != getpid() else { return }
+        guard config.autoKillNames.contains(where: {
+            $0.caseInsensitiveCompare(raw.actor) == .orderedSame
+        }) else { return }
+        guard classifier.classify(raw).tier == .remote else { return }
+
+        switch autoKillEngine.evaluate(actor: raw.actor) {
+        case .skip:
+            return
+
+        case .halted:
+            // One line and one notification per halted episode — the guard
+            // exists to stop a fight with whatever keeps respawning the
+            // process, and that fight would otherwise be loud, not quiet.
+            guard autoKillEngine.takeHaltNotice(actor: raw.actor) else { return }
+            let count = autoKillEngine.killCount(actor: raw.actor)
+            evidenceLog.appendRaw(
+                kind: .processKill,
+                actor: raw.actor,
+                rawSummary: KillCopy.haltLogSummary(name: raw.actor, count: count)
+            )
+            postNotification(KillCopy.haltNotification(name: raw.actor, count: count, language: language))
+
+        case .kill:
+            // TERM → wait → KILL, on this queue: the two other options are the
+            // main thread (a frozen menu) and a second queue (evidence lines
+            // ordered around a log the pipeline owns). The wait is bounded at
+            // 3 s and only happens for a process that ignores SIGTERM.
+            let outcome = killController.kill(pid: pid, expectedName: raw.actor, force: false)
+            evidenceLog.appendRaw(
+                kind: .processKill,
+                actor: raw.actor,
+                rawSummary: KillCopy.logSummary(outcome, name: raw.actor, pid: pid, initiator: .auto)
+            )
+            if let copy = KillCopy.autoKillNotification(
+                outcome,
+                name: raw.actor,
+                pid: pid,
+                language: language
+            ) {
+                postNotification(copy)
+            }
+        }
     }
 
     /// Cancels the polls. A poll already delivered to the reader's queue may

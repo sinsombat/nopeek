@@ -39,6 +39,9 @@ public enum EventKind: String, Codable, Equatable, Sendable {
     case calibrationResult = "calibration-result"
     case checkupRun = "checkup-run"
     case exportCreated = "export-created"
+    /// One kill attempt (manual or auto) — spec §6d/§8. The `rawSummary` of the
+    /// line carries the outcome.
+    case processKill = "process-kill"
     case heartbeat = "heartbeat"
 }
 

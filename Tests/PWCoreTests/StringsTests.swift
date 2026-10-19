@@ -144,6 +144,21 @@ import PWCore
             "export.preset.7d", "export.preset.30d", "export.preset.all",
             "export.running", "export.done", "export.empty", "export.failed",
             "export.savedTo", "export.reveal", "export.button.close",
+            // T21's Kill flow: the two tray-row actions, the confirm dialog,
+            // the per-outcome status lines and the admin-elevation lines.
+            "menu.event.kill", "menu.event.reveal",
+            "kill.title", "kill.detail", "kill.force", "kill.policy",
+            "kill.button.kill", "kill.button.cancel", "kill.location.unknown",
+            "kill.done.terminated", "kill.done.escalated", "kill.done.refused",
+            "kill.done.noPermission", "kill.done.noSuchProcess", "kill.done.failed",
+            "kill.done.self",
+            "kill.admin.ask.title", "kill.admin.ask.body", "kill.admin.ask.ok",
+            "kill.admin.cancelled", "kill.admin.done", "kill.admin.failed",
+            // T21's auto-kill notifications (killed / denied / halted).
+            "notif.autokill.killed.title", "notif.autokill.killed.body",
+            "notif.autokill.escalated.body",
+            "notif.autokill.denied.title", "notif.autokill.denied.body",
+            "notif.autokill.halted.title", "notif.autokill.halted.body",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")

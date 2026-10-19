@@ -49,6 +49,17 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
     /// Actors (path prefix or process name) the user trusts. Passthrough — no
     /// built-in entries, and never merged with anything.
     public var allowlist: [String]
+    /// Auto-kill opt-in (spec §6d, §7). `false` by default: NoPeek never kills
+    /// anything by itself unless the user turns this on *and* names the
+    /// processes below.
+    public var autoKillEnabled: Bool
+    /// The process names auto-kill may kill — one by one, never derived from
+    /// the remote-control watchlist (spec §6d: "ต้องใส่ชื่อเองทีละตัว"). Matched
+    /// case-insensitively against an event's actor.
+    public var autoKillNames: [String]
+    /// The loop guard (spec §6d): how many auto-kills per name per rolling hour
+    /// before that name is left alone. Adjusted from the Settings window (T23).
+    public var autoKillMaxPerHour: Int
 
     // MARK: - Init
 
@@ -64,7 +75,10 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
         orgPatterns: [String] = [],
         remoteControlExtra: [String] = [],
         systemNoiseExtra: [String] = [],
-        allowlist: [String] = []
+        allowlist: [String] = [],
+        autoKillEnabled: Bool = false,
+        autoKillNames: [String] = [],
+        autoKillMaxPerHour: Int = 5
     ) {
         self.language = language
         self.sound = sound
@@ -78,6 +92,9 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
         self.remoteControlExtra = remoteControlExtra
         self.systemNoiseExtra = systemNoiseExtra
         self.allowlist = allowlist
+        self.autoKillEnabled = autoKillEnabled
+        self.autoKillNames = autoKillNames
+        self.autoKillMaxPerHour = autoKillMaxPerHour
     }
 
     /// Every scalar at its spec §7 default and every user list empty.
@@ -149,6 +166,7 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
         case orgBannerCooldownSeconds, logRetentionDays, gapAlertThresholdMinutes
         case replaceDefaultLists
         case orgPatterns, remoteControlExtra, systemNoiseExtra, allowlist
+        case autoKillEnabled, autoKillNames, autoKillMaxPerHour
     }
 
     /// Tolerant decoding: every key is optional and falls back to its spec §7
@@ -182,6 +200,12 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
             ?? fallback.systemNoiseExtra
         self.allowlist = try container.decodeIfPresent([String].self, forKey: .allowlist)
             ?? fallback.allowlist
+        self.autoKillEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoKillEnabled)
+            ?? fallback.autoKillEnabled
+        self.autoKillNames = try container.decodeIfPresent([String].self, forKey: .autoKillNames)
+            ?? fallback.autoKillNames
+        self.autoKillMaxPerHour = try container.decodeIfPresent(Int.self, forKey: .autoKillMaxPerHour)
+            ?? fallback.autoKillMaxPerHour
     }
 }
 

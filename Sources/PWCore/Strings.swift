@@ -35,6 +35,8 @@ public struct NotificationCopy: Equatable, Sendable {
 /// - `notif.*`  notification title/body copy, grouped per tier
 /// - `menu.*`   status-menu labels, status lines and state tooltips
 /// - `banner.*` on-screen banner copy (spec §6)
+/// - `kill.*`   the Kill confirm dialog, its status lines and the admin prompt
+///              (T21, spec §6d)
 /// - `about.*`  the About panel (name/version/limits, spec §13)
 /// - `app.*`    the product name used for accessibility labels
 ///
@@ -359,6 +361,97 @@ public enum Strings {
         "export.savedTo": [.th: "บันทึกไว้ที่ %@", .en: "Saved to %@"],
         "export.reveal": [.th: "เปิดใน Finder", .en: "Reveal in Finder"],
         "export.button.close": [.th: "ปิด", .en: "Close"],
+
+        // MARK: Kill & auto-kill (T21, spec §6d)
+
+        // The two tray-row actions (spec §6: REMOTE/ORG rows carry `Kill`;
+        // any row with a path carries `เปิดตำแหน่ง`). Deliberately bare — the
+        // row they hang from already names the process.
+        "menu.event.kill": [.th: "Kill", .en: "Kill"],
+        "menu.event.reveal": [.th: "เปิดตำแหน่ง", .en: "Reveal in Finder"],
+        // The confirm dialog (spec §6d): name / location / pid, the Force
+        // checkbox, and the corporate-policy warning — verbatim from the spec.
+        "kill.title": [.th: "ยืนยันการ kill process?", .en: "Confirm process kill"],
+        "kill.detail": [
+            .th: "ชื่อ: %@\nตำแหน่ง: %@\npid: %@",
+            .en: "Name: %@\nLocation: %@\npid: %@",
+        ],
+        "kill.force": [
+            .th: "Force (SIGKILL) ทันที — ไม่รอ 3 วินาที",
+            .en: "Force (SIGKILL) now — skip the 3 s wait",
+        ],
+        "kill.policy": [
+            .th: "การฆ่า agent ขององค์กรอาจขัด policy ของบริษัท",
+            .en: "Killing an org agent may violate your company's policy",
+        ],
+        "kill.button.kill": [.th: "Kill", .en: "Kill"],
+        "kill.button.cancel": [.th: "ยกเลิก", .en: "Cancel"],
+        "kill.location.unknown": [.th: "ไม่ทราบตำแหน่ง", .en: "location unknown"],
+        // Status-line confirmations, one per outcome (T17's pattern: a menu
+        // action confirms itself without a notification).
+        "kill.done.terminated": [.th: "✅ ส่ง %@ แล้ว: %@", .en: "✅ %@ delivered: %@"],
+        "kill.done.escalated": [
+            .th: "✅ %@ ไม่ยอมตายด้วย SIGTERM → SIGKILL",
+            .en: "✅ %@ survived SIGTERM → SIGKILL sent",
+        ],
+        "kill.done.refused": [
+            .th: "⚠️ pid ถูกใช้ซ้ำแล้ว — ไม่ได้ฆ่า %@",
+            .en: "⚠️ pid was reused — %@ not killed",
+        ],
+        "kill.done.noPermission": [
+            .th: "⚠️ ไม่มีสิทธิ์ฆ่า %@ — ต้องสิทธิ์ผู้ดูแล",
+            .en: "⚠️ No permission to kill %@ — admin rights needed",
+        ],
+        "kill.done.noSuchProcess": [.th: "ℹ️ %@ จบไปแล้ว", .en: "ℹ️ %@ is already gone"],
+        "kill.done.failed": [
+            .th: "❌ kill %@ ไม่สำเร็จ (errno %@)",
+            .en: "❌ Could not kill %@ (errno %@)",
+        ],
+        // The self-guard: NoPeek never kills its own pid.
+        "kill.done.self": [
+            .th: "⛔ ไม่ฆ่า NoPeek เอง",
+            .en: "⛔ Refusing to kill NoPeek itself",
+        ],
+        // EPERM → the macOS admin prompt, manual only, cancellable (spec §6d).
+        "kill.admin.ask.title": [.th: "ต้องสิทธิ์ผู้ดูแล", .en: "Administrator rights needed"],
+        "kill.admin.ask.body": [
+            .th: "process นี้เป็นของ root — เปิดกล่องรหัส admin ของ macOS เพื่อลองใหม่? (ยกเลิกได้)",
+            .en: "This process is root-owned — open the macOS admin prompt to retry? (you can cancel)",
+        ],
+        "kill.admin.ask.ok": [.th: "เปิดกล่องรหัส admin", .en: "Open admin prompt"],
+        "kill.admin.cancelled": [
+            .th: "ยกเลิกแล้ว — ไม่ได้ใช้ elevation",
+            .en: "Cancelled — elevation not used",
+        ],
+        "kill.admin.done": [.th: "✅ ใช้สิทธิ์ admin แล้ว: %@", .en: "✅ With admin rights: %@"],
+        "kill.admin.failed": [.th: "❌ elevation ไม่สำเร็จ: %@", .en: "❌ Elevation failed: %@"],
+        // Auto-kill notifications (spec §6d): the kill, the permission refusal
+        // (auto-kill never prompts), and the loop guard's one halt notice.
+        "notif.autokill.killed.title": [.th: "🚫 ฆ่า %@ แล้ว", .en: "🚫 Killed %@"],
+        "notif.autokill.killed.body": [
+            .th: "ส่ง %@ แล้ว (pid %@)",
+            .en: "%@ sent (pid %@)",
+        ],
+        "notif.autokill.escalated.body": [
+            .th: "SIGTERM แล้วยังอยู่ → SIGKILL (pid %@)",
+            .en: "Survived SIGTERM → SIGKILL (pid %@)",
+        ],
+        "notif.autokill.denied.title": [
+            .th: "kill ไม่ได้ (ต้องสิทธิ์)",
+            .en: "Could not kill (needs admin)",
+        ],
+        "notif.autokill.denied.body": [
+            .th: "%@ (pid %@) — auto-kill ไม่เด้ง admin",
+            .en: "%@ (pid %@) — auto-kill never prompts for admin",
+        ],
+        "notif.autokill.halted.title": [
+            .th: "auto-kill loop — หยุดฆ่าแล้ว",
+            .en: "auto-kill loop — stopped",
+        ],
+        "notif.autokill.halted.body": [
+            .th: "%@ ถูกฆ่า %@ ครั้งในชั่วโมงนี้ — อาจมีตัว respawn เอง",
+            .en: "%@ was killed %@ time(s) this hour — something may be respawning it",
+        ],
 
         // MARK: App
 

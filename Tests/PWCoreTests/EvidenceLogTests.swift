@@ -370,4 +370,40 @@ import PWCore
         #expect(later.map(\.event.actor) == ["watchdog"])
         #expect(later.map(\.event.kind) == [.heartbeat])
     }
+
+    @Test func testAppendRawCarriesAProcessKillSummary() throws {
+        // Spec §6d/§8: every kill attempt leaves one `process-kill` line —
+        // SYSTEM_NOISE + `lifecycle`, like the other lifecycle events — and its
+        // `rawSummary` is where the outcome (signal / EPERM / elevation /
+        // guard) is written down.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+
+        let clock = TestClock(now: Self.day(0, hour: 9))
+        let log = EvidenceLog(directory: directory, now: { clock.now })
+
+        log.appendRaw(
+            kind: .processKill,
+            actor: "sleep",
+            rawSummary: "manual: SIGTERM delivered to sleep (pid 4242)"
+        )
+
+        let events = log.read(from: Self.day(0, hour: 0), to: Self.day(0, hour: 23))
+        let event = try #require(events.first)
+        #expect(event.event.kind == .processKill)
+        #expect(event.event.kind.rawValue == "process-kill")
+        #expect(event.event.actor == "sleep")
+        #expect(event.event.rawSummary == "manual: SIGTERM delivered to sleep (pid 4242)")
+        #expect(event.event.source == .system)
+        #expect(event.tier == .systemNoise)
+        #expect(event.reason == "lifecycle")
+
+        // Omitting the summary keeps the pre-T21 line shape: no `rawSummary`
+        // key at all, so old and new lifecycle lines stay one format.
+        clock.advance(days: 1)
+        log.appendRaw(kind: .monitorStarted)
+        let plain = log.read(from: Self.day(1, hour: 0), to: Self.day(1, hour: 23))
+        #expect(plain.first?.event.rawSummary == nil)
+        #expect(plain.first?.event.kind == .monitorStarted)
+    }
 }

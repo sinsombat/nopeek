@@ -30,10 +30,15 @@ final class MenuBuilder {
     /// Rebuilds `menu` from `state` and returns the notification-permission
     /// warning row, so the caller can refresh its visibility once the async
     /// permission check lands.
+    ///
+    /// `events` is the same tray sample `state` was built from — handler order
+    /// matches `state.eventRows` one for one — so a row's T21 actions
+    /// (`Kill` / `เปิดตำแหน่ง`) always describe the event the row is showing.
     @discardableResult
     func populate(
         _ menu: NSMenu,
         with state: MenuState,
+        events: [ClassifiedEvent],
         language: Language,
         target: StatusItemController
     ) -> NSMenuItem {
@@ -56,9 +61,11 @@ final class MenuBuilder {
         menu.addItem(.separator())
 
         // Spec §6: the ten latest events, newest first (the empty state is a
-        // row of its own when the tray has nothing).
-        for row in state.eventRows {
-            menu.addItem(infoRow(row))
+        // row of its own when the tray has nothing). A row that has something
+        // to act on carries the T21 actions as a submenu — see `eventRow`.
+        for (index, row) in state.eventRows.enumerated() {
+            let event = index < events.count ? events[index] : nil
+            menu.addItem(eventRow(row, event: event, language: language, target: target))
         }
 
         menu.addItem(.separator())
@@ -235,6 +242,53 @@ final class MenuBuilder {
 
     // MARK: - Row constructors
 
+    /// One event row (spec §6).
+    ///
+    /// Rows with nothing to act on stay what T17 made them: disabled info rows.
+    /// A row that can be killed or revealed becomes an **enabled** item whose
+    /// submenu carries the actions (spec §6d) — AppKit does not open the submenu
+    /// of a disabled item, so greying the parent would hide the actions
+    /// entirely. The action's `representedObject` is the row's `KillTarget`,
+    /// which is what the selectors act on.
+    private func eventRow(
+        _ title: String,
+        event: ClassifiedEvent?,
+        language: Language,
+        target: StatusItemController
+    ) -> NSMenuItem {
+        let item = infoRow(title)
+        guard let event else { return item }
+
+        let actions = NSMenu()
+        actions.autoenablesItems = false
+
+        if event.offersKillAction {
+            actions.addItem(
+                actionRow(
+                    Strings.t("menu.event.kill", language),
+                    #selector(StatusItemController.killRow(_:)),
+                    target,
+                    represented: KillTarget(event)
+                )
+            )
+        }
+        if event.offersLocationAction {
+            actions.addItem(
+                actionRow(
+                    Strings.t("menu.event.reveal", language),
+                    #selector(StatusItemController.revealRow(_:)),
+                    target,
+                    represented: KillTarget(event)
+                )
+            )
+        }
+
+        guard actions.numberOfItems > 0 else { return item }
+        item.isEnabled = true
+        item.submenu = actions
+        return item
+    }
+
     /// A read-only row (status line, event rows, warning).
     private func infoRow(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -246,10 +300,12 @@ final class MenuBuilder {
         _ title: String,
         _ action: Selector,
         _ target: AnyObject?,
-        key: String = ""
+        key: String = "",
+        represented: Any? = nil
     ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = target
+        item.representedObject = represented
         return item
     }
 }

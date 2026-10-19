@@ -435,4 +435,74 @@ import PWCore
         // A failed write leaves the in-memory config untouched.
         #expect(store.config == NoPeekConfig.default)
     }
+
+    // MARK: - Auto-kill keys (T21, spec §7/§6d)
+
+    @Test func testAutoKillDefaultsAreOptedOut() {
+        // Ruling R17: auto-kill is off unless the user turns it on and names
+        // the processes themselves.
+        let config = NoPeekConfig.default
+        #expect(config.autoKillEnabled == false)
+        #expect(config.autoKillNames.isEmpty)
+        #expect(config.autoKillMaxPerHour == 5)
+
+        // The three keys are part of the written shape, so an existing install
+        // picks the defaults up from its own file.
+        #expect(
+            NoPeekConfig(
+                autoKillEnabled: true,
+                autoKillNames: ["sleep"],
+                autoKillMaxPerHour: 2
+            ).autoKillEnabled == true
+        )
+    }
+
+    @Test func testAutoKillKeysDecodeFromTheFile() throws {
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+        let url = directory.appendingPathComponent("config.json")
+        try Self.write(
+            #"{"autoKillEnabled": true, "autoKillNames": ["sleep", "dwagent"], "autoKillMaxPerHour": 2}"#,
+            to: url
+        )
+
+        let store = ConfigStore(url: url) { _ in }
+        store.load()
+
+        #expect(store.lastError == nil)
+        #expect(store.config.autoKillEnabled == true)
+        #expect(store.config.autoKillNames == ["sleep", "dwagent"])
+        #expect(store.config.autoKillMaxPerHour == 2)
+        // Per-key tolerance is unchanged: everything else is still spec §7.
+        #expect(store.config.sound == true)
+        #expect(store.config.logRetentionDays == 30)
+    }
+
+    @Test func testAutoKillKeysPersistThroughTheDefaultFile() throws {
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+        let url = directory.appendingPathComponent("config.json")
+
+        let store = ConfigStore(url: url) { _ in }
+        store.load() // missing file → the default file is written
+
+        #expect(try Self.decodeConfig(at: url) == NoPeekConfig.default)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        for key in ["autoKillEnabled", "autoKillNames", "autoKillMaxPerHour"] {
+            #expect(text.contains("\"\(key)\""), "the default file must carry \(key)")
+        }
+
+        // Writes go through the same store path T23's Settings window will use.
+        try store.update { config in
+            config.autoKillEnabled = true
+            config.autoKillNames = ["sleep"]
+            config.autoKillMaxPerHour = 3
+        }
+
+        let reread = try Self.decodeConfig(at: url)
+        #expect(reread.autoKillEnabled == true)
+        #expect(reread.autoKillNames == ["sleep"])
+        #expect(reread.autoKillMaxPerHour == 3)
+        #expect(store.config == reread)
+    }
 }
