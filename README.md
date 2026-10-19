@@ -206,6 +206,19 @@ More caveats, so nobody is surprised later:
 - **Two notifications for one ⌘⇧5** — known v1 behaviour: both `screencapture` and `replayd` log the capture and the throttle groups per actor. Trust one of them to quiet it.
 - **Nothing to kill in a remote row** — Kill only appears for ORG/REMOTE rows whose process still exists; root-owned processes take the manual admin path.
 
+## Install from a Release
+
+Prefer not to build? Download `NoPeek-<version>.zip` (or the `.dmg`) from the [Releases](https://github.com/sinsombat/nopeek/releases) page — CI builds them on `macos-26` (Apple-silicon/arm64) with a `SHA256SUMS.txt` checksum file alongside (`shasum -a 256 -c SHA256SUMS.txt` to verify).
+
+Release builds are **ad-hoc signed, not notarized**, so macOS quarantines the download (App Translocation also blocks `~/Applications` moves until cleared). Clear it once:
+
+```bash
+xattr -dr com.apple.quarantine ~/Applications/NoPeek.app   # after copying NoPeek.app there
+open ~/Applications/NoPeek.app
+```
+
+That installs the app only; for the login LaunchAgent either build from source (`make install`, below) or add `NoPeek.app` in System Settings → General → Login Items.
+
 ## Build from source
 
 Requirements: **macOS 26+** (developed and tested on macOS 27) and Xcode **Command Line Tools** (`xcode-select --install`). No Homebrew, no third-party dependencies, no Xcode project, no Apple Developer account.
@@ -422,6 +435,19 @@ make uninstall                 # หยุด + ลบแอปและ LaunchA
 - **ไม่จับอะไรเลย** — รัน Calibration Wizard + System Checkup; เช็คว่าสิ่งที่คุณรออยู่นั้นเป็น system noise แบบ `WindowManager` หรือเปล่า (ลง log อย่างเดียวโดยออกแบบ); จำไว้ว่า `allowlist` และ `replaceDefaultLists` เปลี่ยนสิ่งที่รายงาน
 - **⌘⇧5 ครั้งเดียวได้ 2 notification** — พฤติกรรมที่รู้อยู่ของ v1: ทั้ง `screencapture` และ `replayd` ลง log แล้ว throttle จัดกลุ่มแยกตาม actor; trust ตัวใดตัวหนึ่งให้เงียบได้
 - **แถว remote ไม่มีปุ่ม Kill** — Kill จะโผล่เฉพาะแถว ORG/REMOTE ที่ process ยังอยู่; process ของ root ต้องใช้ทาง manual + admin
+
+## ติดตั้งจาก Release
+
+ไม่อยาก build เอง? ดาวน์โหลด `NoPeek-<version>.zip` (หรือ `.dmg`) จากหน้า [Releases](https://github.com/sinsombat/nopeek/releases) — CI build บน `macos-26` (Apple silicon/arm64) พร้อมไฟล์ checksum `SHA256SUMS.txt` (`shasum -a 256 -c SHA256SUMS.txt` เพื่อตรวจ)
+
+ไฟล์ที่ปล่อยจาก CI เป็น **ad-hoc signed ไม่ได้ notarize** — macOS จะติด quarantine ให้ (และ App Translocation จะกันการย้ายเข้า `~/Applications` จนกว่าจะเคลียร์) เคลียร์ครั้งเดียว:
+
+```bash
+xattr -dr com.apple.quarantine ~/Applications/NoPeek.app   # หลังจากคัดลอก NoPeek.app ไปวางแล้ว
+open ~/Applications/NoPeek.app
+```
+
+วิธีนี้ได้ตัวแอปเท่านั้น — ถ้าต้องการ LaunchAgent ให้เริ่มทุกครั้งที่ login ให้ build จาก source (`make install` ด้านล่าง) หรือเพิ่ม `NoPeek.app` ใน System Settings → General → Login Items
 
 ## Build จาก source
 

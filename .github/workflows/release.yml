@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: test → package (zip + dmg) → GitHub Release
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Toolchain info
+        run: swift --version
+
+      - name: Test suite (make test)
+        run: make test
+
+      - name: Build .app (ad-hoc signed)
+        run: make app
+
+      - name: Package zip + dmg
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          cd build
+          ditto -c -k --sequesterRsrc --keepParent NoPeek.app "NoPeek-${VERSION}.zip"
+          hdiutil create -volname "NoPeek ${VERSION}" -srcfolder NoPeek.app \
+            -ov -format UDZO "NoPeek-${VERSION}.dmg"
+          shasum -a 256 "NoPeek-${VERSION}.zip" "NoPeek-${VERSION}.dmg" | tee SHA256SUMS.txt
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoPeek-packages
+          path: |
+            build/NoPeek-*.zip
+            build/NoPeek-*.dmg
+            build/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          gh release create "$TAG" \
+            --title "NoPeek ${VERSION}" \
+            --generate-notes \
+            "build/NoPeek-${VERSION}.zip" \
+            "build/NoPeek-${VERSION}.dmg" \
+            "build/SHA256SUMS.txt"
