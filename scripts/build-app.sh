@@ -19,7 +19,7 @@ APP_DIR="$ROOT_DIR/build/NoPeek.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 EXECUTABLE_NAME="NoPeek"
 BUNDLE_ID="com.sinsombat.nopeek"
-BUNDLE_VERSION="1.0"
+BUNDLE_VERSION="1.0.1"
 MINIMUM_SYSTEM_VERSION="26.0"
 
 cd "$ROOT_DIR"
@@ -39,6 +39,25 @@ rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS_DIR/MacOS"
 cp "$BUILT_EXECUTABLE" "$CONTENTS_DIR/MacOS/$EXECUTABLE_NAME"
 
+# App icon: resources/AppIcon-1024.png → Contents/Resources/AppIcon.icns. Built
+# here (not committed as .icns) so the source PNG stays the single source of
+# truth; `sips` + `iconutil` are present on macOS everywhere, CI included.
+ICON_SOURCE="$ROOT_DIR/resources/AppIcon-1024.png"
+if [ ! -f "$ICON_SOURCE" ]; then
+    echo "error: icon source not found at $ICON_SOURCE" >&2
+    exit 1
+fi
+echo "==> app icon (AppIcon-1024.png → AppIcon.icns)"
+ICONSET="$ROOT_DIR/build/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET" "$CONTENTS_DIR/Resources"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    sips -z "$((size * 2))" "$((size * 2))" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$CONTENTS_DIR/Resources/AppIcon.icns"
+rm -rf "$ICONSET"
+
 # No usage-description keys on purpose: NoPeek never asks for a TCC permission
 # (spec §9). `LSUIElement` keeps it out of the Dock and the app switcher.
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
@@ -48,6 +67,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <dict>
 	<key>CFBundleExecutable</key>
 	<string>$EXECUTABLE_NAME</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -65,7 +86,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Sinsombat. Local ad-hoc-signed build — not for distribution.</string>
+	<string>© 2026 Sinsombat. Ad-hoc signed, not notarized.</string>
 </dict>
 </plist>
 PLIST
