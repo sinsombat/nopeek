@@ -219,21 +219,33 @@ import PWCore
     }
 
     @Test func testReportHasSettingsLinks() throws {
-        // The three items with a surface in System Settings carry the deep
-        // links verified on this macOS 27 (the Sharing pane and the Screen &
-        // System Audio Recording page); the listener item has no pane, so its
-        // link is nil and its button will not exist.
+        // The three items with a surface in System Settings carry the macOS
+        // 26/27 deep links — each one anchored at the row it is about (the
+        // Sharing pane's service anchors, and the Screen & System Audio
+        // Recording page under Privacy & Security, whose anchor is
+        // `Privacy_AudioCapture` on 26+; `Privacy_ScreenCapture` silently lands
+        // at the pane root). The listener item has no pane, so its link is nil
+        // and its button will not exist.
         let report = service(outputs: Self.quietOutputs()).run()
 
-        let sharing = URL(string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension")
-        let screenRecording = URL(
-            string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
-        )
+        let screenSharing = try #require(URL(
+            string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension?Services_ScreenSharing"
+        ))
+        let remoteManagement = try #require(URL(
+            string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension?Services_ARDService"
+        ))
+        let screenRecording = try #require(URL(
+            string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture"
+        ))
 
-        #expect(report.items[0].settingsURL == sharing)
-        #expect(report.items[1].settingsURL == sharing)
+        #expect(report.items[0].settingsURL == screenSharing)
+        #expect(report.items[1].settingsURL == remoteManagement)
         #expect(report.items[2].settingsURL == screenRecording)
         #expect(report.items[3].settingsURL == nil)
+
+        // The two Sharing rows are the same pane but must not be the same link:
+        // the anchors are what land the user on the right service.
+        #expect(report.items[0].settingsURL != report.items[1].settingsURL)
     }
 
     @Test func testBoundedListenerDetail() throws {

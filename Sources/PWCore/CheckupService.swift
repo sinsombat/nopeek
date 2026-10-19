@@ -177,6 +177,8 @@ public final class CheckupService: Sendable {
         let process: String
         /// The TCP ports that mean "this channel is listening".
         let ports: [String]
+        /// The System Settings link that opens this service's own row.
+        let settingsURL: URL?
     }
 
     /// Screen Sharing: `screensharingd` serves the rfb/VNC listener (5900).
@@ -184,7 +186,8 @@ public final class CheckupService: Sendable {
         titleKey: "checkup.item.screensharing",
         label: "com.apple.screensharing",
         process: "screensharingd",
-        ports: ["5900"]
+        ports: ["5900"],
+        settingsURL: sharingSettingsURL("Services_ScreenSharing")
     )
 
     /// Remote Management / Apple Remote Desktop: `ARDAgent` serves ARD (3283).
@@ -192,7 +195,8 @@ public final class CheckupService: Sendable {
         titleKey: "checkup.item.remoteManagement",
         label: "com.apple.RemoteDesktop",
         process: "ARDAgent",
-        ports: ["3283"]
+        ports: ["3283"],
+        settingsURL: sharingSettingsURL("Services_ARDService")
     )
 
     /// How many names or ports a detail line lists before it counts the rest
@@ -205,19 +209,24 @@ public final class CheckupService: Sendable {
     private static let netstat = "/usr/sbin/netstat"
 
     /// The Sharing pane (General → Sharing on macOS 26/27), where Screen
-    /// Sharing and Remote Management are switched. Verified on macOS 27: the
-    /// URL resolves and hosts the `com.apple.Sharing-Settings.extension`
-    /// content.
-    private static let sharingSettingsURL = URL(
-        string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
-    )
+    /// Sharing and Remote Management are switched, with the anchor that selects
+    /// the service's own row: `?Services_ScreenSharing`, `?Services_ARDService`
+    /// (the 26+ pane mapping; the base URL alone just lands on the pane).
+    private static func sharingSettingsURL(_ anchor: String) -> URL? {
+        URL(string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension?\(anchor)")
+    }
 
     /// Privacy & Security → Screen & System Audio Recording, the list the
     /// org-agent item points at (spec §13: a deep link instead of reading that
-    /// list, which needs Full Disk Access). Verified on macOS 27: the URL
-    /// pushes the "Screen & System Audio Recording" page, not just the pane.
+    /// list, which needs Full Disk Access).
+    ///
+    /// Acceptance fix (macOS 26/27): the anchor is `Privacy_AudioCapture` — the
+    /// pane renamed the page and the older `Privacy_ScreenCapture` anchor no
+    /// longer resolves, so Settings opened at the Privacy & Security root.
+    /// (`NSWorkspace.open` is the mechanism that still honours these links on
+    /// 26+; the shell's `open` no longer navigates to the anchor.)
     private static let screenRecordingSettingsURL = URL(
-        string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
+        string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture"
     )
 
     // MARK: - Dependencies
@@ -321,7 +330,7 @@ public final class CheckupService: Sendable {
             title: Strings.t(service.titleKey, language),
             severity: severity,
             detail: detail,
-            settingsURL: Self.sharingSettingsURL
+            settingsURL: service.settingsURL
         )
     }
 
