@@ -102,6 +102,31 @@ public enum Strings {
         }
     }
 
+    // MARK: - Notification copy for a monitoring gap (T24, spec §4/§5)
+
+    /// Title + body for the startup monitor-gap notification (spec §4): the
+    /// monitor reporting that it was not watching, spanning `HH:mm`–`HH:mm`.
+    ///
+    /// Beside `notificationCopy(for:)` rather than inside it: a gap has no
+    /// `Tier` — spec §5 keeps monitor-health notices outside the tier table and
+    /// outside `Pause`, and the app posts this one through
+    /// `NotificationService` directly. The two times are rendered with
+    /// `MenuStateBuilder.gapTime`, the same `HH:mm` the menu's own gap row
+    /// uses, so the notice and the row agree about the span.
+    public static func gapNotificationCopy(
+        for gap: GapReport,
+        language: Language = Strings.defaultLanguage
+    ) -> NotificationCopy {
+        NotificationCopy(
+            title: t("notif.gap.title", language),
+            body: String(
+                format: t("notif.gap.body", language),
+                MenuStateBuilder.gapTime(gap.from),
+                MenuStateBuilder.gapTime(gap.to)
+            )
+        )
+    }
+
     /// The table. Both languages must be present for every key.
     ///
     /// Copy that spec §6 spells out literally (banner, status line, warning,

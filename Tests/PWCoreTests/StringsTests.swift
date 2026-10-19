@@ -314,4 +314,27 @@ import PWCore
             )
         }
     }
+
+    // MARK: - Monitoring-gap copy (T24, spec §4/§5)
+
+    @Test func testGapNotificationCopyCarriesTheRange() {
+        // The monitor-health notice (spec §5: no tier, unaffected by `Pause`):
+        // "ไม่ได้เฝ้าช่วง HH:MM–HH:MM", with the gap's own local times.
+        let from = Date(timeIntervalSince1970: 1_762_000_000)
+        let gap = GapReport(from: from, to: from.addingTimeInterval(3_600), duration: 3_600)
+
+        let th = Strings.gapNotificationCopy(for: gap, language: .th)
+        #expect(th.title == "⚠️ ไม่ได้เฝ้าช่วงหนึ่ง")
+        #expect(
+            th.body == "ไม่ได้เฝ้าช่วง "
+                + "\(MenuStateBuilder.gapTime(gap.from))–\(MenuStateBuilder.gapTime(gap.to))"
+        )
+
+        let en = Strings.gapNotificationCopy(for: gap, language: .en)
+        #expect(en.title == "⚠️ Monitoring gap")
+        #expect(en.body.hasPrefix("Not watching "))
+
+        // The default language is the spec §10 TH default.
+        #expect(Strings.gapNotificationCopy(for: gap) == th)
+    }
 }

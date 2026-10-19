@@ -6,7 +6,7 @@ import PWCore
 
 /// NoPeek's single wiring point (plan T12): it owns one instance of every
 /// core component, turns `Pipeline` actions into real side effects, and holds
-/// the state later tasks build on (T13–T21).
+/// the state later tasks build on (T13–T24).
 ///
 /// **Construction** (`AppController.shared`, main thread):
 /// `ConfigStore(~/.config/nopeek/config.json)` → `EvidenceLog(~/Library/Logs/NoPeek)`
@@ -30,13 +30,20 @@ import PWCore
 /// `bannerLevel`, the notification sound) already followed the file live.
 /// `start()` arms the file watcher and `stop()` detaches it.
 ///
-/// **Startup order** (`start()`): the `monitor-started` lifecycle line first,
-/// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
-/// whose polls run on the reader's serial queue, so `tick()` and
-/// `pipeline.handle(_:)` serialize with log lines) and the mic watch (T15: the
-/// same shape at 2 s), and finally the T18 calibration wizard — which opens by
-/// itself on a launch that finds no persisted summary. T21 wraps this with
-/// retention purge, the gap check and the heartbeat timer.
+/// **Startup order** (`start()`, T24). One `StartupPlan.run` executes the spec
+/// §3/§4 sequence in its pinned order — read the log's last activity, append
+/// `monitor-started`, purge retention, measure the gap — with this class
+/// supplying the log's three bodies and the plan supplying the order (reading
+/// *before* writing is what keeps the gap measurable; see `StartupPlan`). A gap
+/// is then recorded, announced through `NotificationService` directly (spec §5
+/// monitor-health: not a pipeline event, so `Pause` cannot mute it) and kept in
+/// `latestGap` for the menu's gap row. Then the reader, then the process watch
+/// (T13: a 3 s `DispatchSourceTimer` whose polls run on the reader's serial
+/// queue, so `tick()` and `pipeline.handle(_:)` serialize with log lines) and
+/// the mic watch (T15: the same shape at 2 s), then the T24 heartbeat (5 min,
+/// the same hop to the reader's queue, which keeps `lastActivity()` fresh while
+/// nothing is captured), and finally the T18 calibration wizard — which opens
+/// by itself on a launch that finds no persisted summary.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
@@ -250,6 +257,13 @@ final class AppController: @unchecked Sendable {
     private let micWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.micwatch")
     private var micWatchTimer: DispatchSourceTimer?
 
+    /// Fires the heartbeat writes (T24, spec §8: one every 5 minutes). Its own
+    /// queue for the same reason as the two above: the timer must not run on
+    /// the main thread, and the append itself is handed to the reader's serial
+    /// queue.
+    private let heartbeatQueue = DispatchQueue(label: "com.sinsombat.nopeek.heartbeat")
+    private var heartbeatTimer: DispatchSourceTimer?
+
     // MARK: - Shared state
 
     /// Guards `tray`, `readerStateValue`, `gapValue` and `started`: the sink
@@ -300,8 +314,8 @@ final class AppController: @unchecked Sendable {
         )
         self.throttler = Throttler()
 
-        // Retention is the configured value already so T21's `purgeOldFiles()`
-        // honours spec §7 without re-reading the config.
+        // Retention is the configured value already so T24's startup
+        // `purgeOldFiles()` honours spec §7 without re-reading the config.
         self.evidenceLog = EvidenceLog(
             directory: Self.defaultLogDirectory,
             retentionDays: configStore.config.logRetentionDays
@@ -487,10 +501,23 @@ final class AppController: @unchecked Sendable {
     /// Records the boot and starts watching (spec §3: every boot leaves a
     /// `monitor-started` line). Idempotent.
     ///
+    /// The T24 startup sequence, in the order the spec pins (see
+    /// `StartupPlan` for why the order is the contract): read the log's last
+    /// activity → append `monitor-started` → purge retention → measure the gap.
+    /// A gap is then recorded, announced and kept for the menu — see
+    /// `reportGap(_:)`.
+    ///
     /// Main actor: the bootstrap path (`applicationDidFinishLaunching`) is, and
-    /// T21's alert-category registration is a `UNUserNotificationCenter` call
+    /// the alert-category registration is a `UNUserNotificationCenter` call
     /// like the permission request next to it. Everything scheduled from here —
-    /// the reader, the two pollers — runs on its own queue as before.
+    /// the reader, the three pollers — runs on its own queue as before.
+    ///
+    /// The three log calls inside the plan run on this thread, *before*
+    /// `reader.start()`: the reader's serial queue is the `EvidenceLog`'s single
+    /// owner from the moment the reader runs, and this is the same pre-reader
+    /// window T12 wrote `monitor-started` in. Every later append — the gap line
+    /// included — goes through `reader.performSerialized` or a watcher queue
+    /// that does.
     @MainActor
     func start() {
         let shouldStart = uiLock.withLock { () -> Bool in
@@ -500,7 +527,20 @@ final class AppController: @unchecked Sendable {
         }
         guard shouldStart else { return }
 
-        evidenceLog.appendRaw(kind: .monitorStarted)
+        // T24: the pinned startup order. The read has to happen before the
+        // `monitor-started` line — the write would otherwise become the newest
+        // activity and hide the very silence the gap check exists to report —
+        // and retention is purged after the read, before the decision.
+        let log = evidenceLog
+        let gap = StartupPlan(
+            gapAlertThresholdMinutes: configStore.config.gapAlertThresholdMinutes
+        )
+        .run(
+            lastActivity: { log.lastActivity() },
+            appendMonitorStarted: { log.appendRaw(kind: .monitorStarted) },
+            purgeOldFiles: { log.purgeOldFiles() }
+        )
+
         // Spec §6: the alert actions (`Kill` / `เปิดตำแหน่ง`) must exist before
         // the first REMOTE/ORG notification is posted, or a notification that
         // arrives would carry no buttons.
@@ -512,6 +552,14 @@ final class AppController: @unchecked Sendable {
         reader.start()
         startProcessWatch()
         startMicWatch()
+        startHeartbeat()
+
+        // Spec §4 monitor-gap: the silence that ended with this launch. It is
+        // announced after the reader is live so the gap line lands behind the
+        // boot line on the log's own queue (see `reportGap(_:)`).
+        if let gap {
+            reportGap(gap)
+        }
 
         // Spec §6 + ruling R24: the wizard runs by itself on a launch that has
         // no *passing* calibration — no file, an unreadable one, or a record
@@ -532,6 +580,7 @@ final class AppController: @unchecked Sendable {
     func stop() {
         stopProcessWatch()
         stopMicWatch()
+        stopHeartbeat()
         configStore.stopWatching()
         reader.stop()
         // A run that is cut short by the app quitting is abandoned, not
@@ -553,8 +602,8 @@ final class AppController: @unchecked Sendable {
     }
 
     /// The latest monitoring gap, for the menu's gap row (spec §6). T24's
-    /// startup check assigns the `GapReport` it detects; until then this is
-    /// `nil` and the row does not exist.
+    /// startup check assigns the `GapReport` it detects (see `reportGap(_:)`);
+    /// until then this is `nil` and the row does not exist.
     var latestGap: GapReport? {
         get { uiLock.withLock { gapValue } }
         set { uiLock.withLock { gapValue = newValue } }
@@ -985,10 +1034,12 @@ final class AppController: @unchecked Sendable {
         }
     }
 
-    /// Posts one already-composed notification (T21's auto-kill notices, which
-    /// are the app's own actions rather than an observation and so have no
-    /// `Tier`): grouped under the system thread like the other monitor-health
-    /// notifications (F3).
+    /// Posts one already-composed notification that belongs to the app itself
+    /// rather than to an observation, so it has no `Tier`: the auto-kill
+    /// notices (T21, spec §6d) and the monitoring gap (T24, spec §4). Grouped
+    /// under the system thread like the other monitor-health notifications
+    /// (F3), and posted with no alert actions — neither names a process to kill
+    /// or reveal.
     private func postNotification(_ copy: NotificationCopy) {
         let notifications = self.notifications
         Task { @MainActor in
@@ -1214,6 +1265,85 @@ final class AppController: @unchecked Sendable {
     private func stopMicWatch() {
         micWatchTimer?.cancel()
         micWatchTimer = nil
+    }
+
+    // MARK: - Heartbeat (T24, spec §8)
+
+    /// Heartbeat cadence: spec §8 writes a `heartbeat` line every 5 minutes so
+    /// the gap check has something to measure against while nothing is being
+    /// captured — a quiet machine must not read as a stopped monitor.
+    private static let heartbeatInterval: TimeInterval = 5 * 60
+
+    /// Arms the heartbeat timer (spec §8). Idempotent.
+    ///
+    /// Same shape as the two watchers above, for the same reason: the timer
+    /// fires on its own queue and the append is handed to the reader's serial
+    /// queue, the `EvidenceLog`'s single owner (T8's contract), so a heartbeat
+    /// serializes with log lines and polls instead of racing them. Measured on
+    /// the reader's queue, one line per 5 minutes is a negligible cost — the
+    /// R14 volume note is about Mission Control chatter, not this.
+    ///
+    /// The first fire is one full interval after the boot: `monitor-started`
+    /// already dates this launch, so an immediate heartbeat would only
+    /// duplicate it. Main actor only (called from `start()`, cancelled by
+    /// `stop()`), like the timers it mirrors.
+    private func startHeartbeat() {
+        guard heartbeatTimer == nil else { return }
+
+        let reader = self.reader
+        let timer = DispatchSource.makeTimerSource(queue: heartbeatQueue)
+        timer.schedule(
+            deadline: .now() + Self.heartbeatInterval,
+            repeating: Self.heartbeatInterval
+        )
+        timer.setEventHandler { [weak self] in
+            reader.performSerialized { [weak self] in
+                self?.evidenceLog.appendRaw(kind: .heartbeat)
+            }
+        }
+        heartbeatTimer = timer
+        timer.resume()
+    }
+
+    /// Cancels the heartbeat; the same one-tick grace as the two watchers
+    /// above (a fire already delivered to the reader's queue may still append
+    /// once — a true observation of a dying session).
+    private func stopHeartbeat() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+    }
+
+    // MARK: - Monitoring gaps (T24, spec §4/§5)
+
+    /// Records, announces and remembers one monitoring gap.
+    ///
+    /// The log line (`monitor-gap`, spec §8) goes through the reader's serial
+    /// queue — the `EvidenceLog`'s single owner from the moment the reader runs
+    /// — the same route the heartbeat, the degraded/recovered lines and every
+    /// pipeline append travel. The read and the boot line in `start()` ran
+    /// directly on the main thread, in the pre-reader window; this one does
+    /// not, because by the time a gap exists to report the reader is live.
+    ///
+    /// The notification goes to `NotificationService` **directly**, never
+    /// through the pipeline: spec §5 keeps monitor-health notices outside the
+    /// tiers and outside `Pause` — a paused app must still say it was not
+    /// watching — and the system thread groups it with the other
+    /// monitor-health notices (F3, R10). It carries no alert actions: the gap
+    /// names no process to kill or reveal.
+    ///
+    /// The report stays in `latestGap`, which is where the menu's gap row
+    /// reads it (spec §6: "⚠️ ไม่ได้เฝ้าช่วง HH:MM–HH:MM"). It is never cleared
+    /// inside a session: the row answers "when was I last not watched?", which
+    /// stays true until the next launch answers it again.
+    private func reportGap(_ gap: GapReport) {
+        latestGap = gap
+
+        let reader = self.reader
+        reader.performSerialized { [weak self] in
+            self?.evidenceLog.appendRaw(kind: .monitorGap)
+        }
+
+        postNotification(Strings.gapNotificationCopy(for: gap, language: language))
     }
 }
 

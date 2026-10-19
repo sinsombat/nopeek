@@ -85,7 +85,7 @@ public final class EvidenceLog {
     /// actors), and `.systemNoise` is the honest slot for "system chatter that
     /// is logged but never notified": a heartbeat or `monitor-started` must not
     /// put the menu-bar icon into its "being watched" state or raise a
-    /// notification. `monitor-gap` is the exception in spirit — T21 notifies
+    /// notification. `monitor-gap` is the exception in spirit — T24 notifies
     /// for it directly, bypassing the tier pipeline — but its log line still
     /// reads as system chatter, which is what it is.
     ///
@@ -152,7 +152,7 @@ public final class EvidenceLog {
     ///
     /// This is what `GapDetector` (T9) compares against the current time at
     /// startup; the heartbeat lines (`appendRaw(kind: .heartbeat)`, every 5
-    /// minutes, T21) exist to keep it fresh while nothing is being captured.
+    /// minutes, T24) exist to keep it fresh while nothing is being captured.
     public func lastActivity() -> Date? {
         guard let newest = logFiles().max(by: { $0.day < $1.day }) else { return nil }
 

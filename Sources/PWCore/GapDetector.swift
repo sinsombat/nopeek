@@ -8,7 +8,7 @@ import Foundation
 /// `from` is the `lastActivity` the caller passed in, `to` the `now` it
 /// passed in, and `duration` their exact difference — the report never
 /// rounds or clamps, so the menu string (T17) and the `monitor-gap` log line
-/// (T21) both carry the real span.
+/// (T24) both carry the real span.
 public struct GapReport: Equatable, Sendable {
     /// Timestamp of the last known activity (last log line or heartbeat).
     public var from: Date
@@ -29,7 +29,7 @@ public struct GapReport: Equatable, Sendable {
 /// Decides whether the monitor was off long enough to deserve a warning
 /// (spec §4 monitor-gap, plan T9).
 ///
-/// At startup (T21) the app hands the detector `lastActivity()` from the
+/// At startup (T24) the app hands the detector `lastActivity()` from the
 /// evidence log and the current time; a silent stretch longer than the
 /// configured threshold (`gapAlertThresholdMinutes`, default 15 minutes —
 /// spec §7) means the machine was asleep, shut down, or the app was not
