@@ -138,11 +138,11 @@ final class CheckupWindowController: NSObject, NSWindowDelegate {
             summaryLabel?.stringValue = ""
         }
 
-        let rows = report.map { rows(for: $0, language: language) } ?? []
-        rowsStack?.setViews(rows, in: .top)
+        let rowViews = report.map { rows(for: $0, language: language) } ?? []
+        rowsStack?.setViews(rowViews, in: .top)
         if let rowsStack {
-            for row in rows {
-                row.widthAnchor.constraint(equalTo: rowsStack.widthAnchor).isActive = true
+            for rowView in rowViews {
+                rowView.widthAnchor.constraint(equalTo: rowsStack.widthAnchor).isActive = true
             }
         }
         sizeToFitContent()
