@@ -36,10 +36,12 @@ The first rule that matches wins, and the org rule sits above everything:
 
 | Tier | Notification | Sound | Red banner | Evidence log |
 |---|---|---|---|---|
-| **ORG** | yes — grouped 60 s/actor, cannot be silenced | always | yes, 60 s/actor cooldown | yes |
-| **REMOTE** | yes | always | yes while `bannerOnForRemote` (default) | yes |
+| **ORG** | yes — grouped 60 s/actor, cannot be silenced | always (ignores `sound`) | yes, 60 s/actor cooldown | yes |
+| **REMOTE** | yes | always (ignores `sound`) | yes while `bannerOnForRemote` (default) | yes |
 | **NORMAL** | yes — throttled (60 s/actor) and muted by Pause | per `sound` | no | yes |
 | SYSTEM_NOISE / ALLOWLIST | never | no | no | yes |
+
+Monitor-health notices (monitoring gap, auto-kill stop) have no tier and follow `sound` too — only ORG and REMOTE are guaranteed to sound.
 
 The red banner (`NSPanel`, 3 px red border, non-activating, `screenSaver` level by default) shows on every display: *"🚨 Org is watching: \<actor\> — \<kind\>"*. It auto-hides after 6 s; clicking it dismisses it and opens the log folder.
 
@@ -51,7 +53,7 @@ Click the shield:
 
 - **Status line** — "Watching — nothing detected", or "Screen capture by X (Ns ago)"; after a shutdown gap, "⚠️ Not watching HH:MM–HH:MM".
 - **10 latest events** — time · tier · actor — kind. ORG/REMOTE rows open a submenu with **Kill** and **Reveal in Finder**.
-- **Trust this app… / Untrust** — manage the allowlist (allowlisted actors are logged but never notified).
+- **Trust this app… / Untrust** — manage the allowlist (allowlisted actors are logged but never notified, unless an org pattern matches them first).
 - **Test alert** — fires one notification per tier so you can see the design.
 - **Calibration Wizard…**, **System Checkup…**, **Export report…**, **History…**, **Settings…** — see below.
 - **Pause 30 minutes / 1 hour / Resume** — pauses NORMAL only; ORG and REMOTE always alert.
@@ -90,7 +92,7 @@ Killing is a response tool you drive; NoPeek never kills anything on its own unl
 
 - tier filter (segmented, including "hide noise"), day range (today / 7 / 30 / all), and a search box (actor/kind/reason);
 - a detail pane per row (reason, raw summary, pid, path) with **Trust**, **Kill** (ORG/REMOTE) and **Reveal in Finder** where applicable;
-- refresh on open and every 5 s; **Export…** for the current range.
+- refresh on open and every 5 s; **Export…** opens the export panel (its fixed 7-day / 30-day / all presets).
 
 ## Settings
 
@@ -133,7 +135,7 @@ Each step shows waiting/✅/❌/timed-out, and the result is saved to `~/Library
 | Key | Default | Meaning |
 |---|---|---|
 | `language` | `"th"` | `"th"` or `"en"` — all UI/notifications |
-| `sound` | `true` | sound with NORMAL notifications (ORG/REMOTE always sound) |
+| `sound` | `true` | sound for NORMAL notifications and system notices (gap, auto-kill); ORG/REMOTE always sound |
 | `bannerOnForRemote` | `true` | red banner for REMOTE events |
 | `bannerLevel` | `"screenSaver"` | banner window level: `"floating"` or `"screenSaver"` |
 | `orgBannerCooldownSeconds` | `60` | banner cooldown per actor (ORG) |
@@ -198,7 +200,7 @@ More caveats, so nobody is surprised later:
 ## Troubleshooting
 
 - **No notifications** — check System Settings ▸ Notifications ▸ NoPeek; if denied, the menu shows *"Notifications off — banners still work"*, and org/remote banners keep working regardless.
-- **Yellow shield / degraded** — the log-stream child died. NoPeek retries automatically (1→30 s backoff, reset after a stable minute) and logs `monitor-degraded`/`monitor-recovered`. Still yellow? `launchctl print gui/$(id -u)/com.sinsombat.nopeek`, `pgrep -fl "log stream"`, then menu ▸ `Reload config` or re-run `make install`.
+- **Yellow shield / degraded** — the log-stream child died. NoPeek retries automatically (1→30 s backoff, reset after a stable minute) and logs `monitor-degraded`/`monitor-recovered`. Still yellow? `launchctl print gui/$(id -u)/com.sinsombat.nopeek`, `pgrep -fl "log stream"`, then re-run `make install` (or just quit and relaunch the app) — `Reload config` does not restart the reader.
 - **`ld: warning: search path '…CommandLineTools…'` during builds** — harmless environment noise from a Command Line Tools-only toolchain, not a NoPeek problem (the code itself builds warning-free). The Makefile already compensates for the CLT-only `swift test` plugin quirk.
 - **Nothing detected at all** — run the Calibration Wizard and System Checkup; confirm `WindowManager`-style system noise is what you are watching (it is logged-only by design); remember `allowlist` and `replaceDefaultLists` change what is reported.
 - **Two notifications for one ⌘⇧5** — known v1 behaviour: both `screencapture` and `replayd` log the capture and the throttle groups per actor. Trust one of them to quiet it.
@@ -215,7 +217,7 @@ make install  # → ~/Applications/NoPeek.app + LaunchAgent, starts now and at l
 make uninstall
 ```
 
-The app is signed ad-hoc (`codesign -s -`) on your machine. That is why it never quarantines and why it needs no entitlements: the only permission it ever requests is notification delivery, and the app itself asks for that at first launch. No Screen Recording, no Accessibility, no Full Disk Access — and no network traffic at all.
+The app is signed ad-hoc (`codesign -s -`) on your machine. A locally built app is never quarantined, and NoPeek needs no entitlements: the only permission it ever requests is notification delivery, and the app itself asks for that at first launch. No Screen Recording, no Accessibility, no Full Disk Access — and no network traffic at all.
 
 ---
 
@@ -251,10 +253,12 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 
 | Tier | Notification | เสียง | แบนเนอร์แดง | Log |
 |---|---|---|---|---|
-| **ORG** | ✅ จัดกลุ่ม 60 วิ/actor ปิดไม่ได้ | เสมอ | ✅ cooldown 60 วิ/actor | ✅ |
-| **REMOTE** | ✅ | เสมอ | ✅ ตาม `bannerOnForRemote` (ค่าเริ่มต้นเปิด) | ✅ |
+| **ORG** | ✅ จัดกลุ่ม 60 วิ/actor ปิดไม่ได้ | เสมอ (ไม่สน `sound`) | ✅ cooldown 60 วิ/actor | ✅ |
+| **REMOTE** | ✅ | เสมอ (ไม่สน `sound`) | ✅ ตาม `bannerOnForRemote` (ค่าเริ่มต้นเปิด) | ✅ |
 | **NORMAL** | ✅ throttle 60 วิ/actor, เงียบตอน Pause | ตาม `sound` | ❌ | ✅ |
 | SYSTEM_NOISE / ALLOWLIST | ❌ | ❌ | ❌ | ✅ |
+
+notification ของระบบ (gap, auto-kill) อยู่นอก tier และทำตาม `sound` ด้วย — มีแค่ ORG/REMOTE ที่การันตีเสียง
 
 แบนเนอร์แดง (`NSPanel` ขอบแดง 3px ไม่แย่ง focus ระดับ `screenSaver` โดยค่าเริ่มต้น) เด้งทุกจอ: *"🚨 ส่องจากองค์กร: \<actor\> — \<kind\>"* ซ่อนเองใน 6 วินาที คลิกที่แบนเนอร์ = ปิด + เปิดโฟลเดอร์ log
 
@@ -266,7 +270,7 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 
 - **บรรทัดสถานะ** — "เฝ้าระวังอยู่ — ไม่มีการส่อง" หรือ "กำลังถูกแคปจอโดย X (เมื่อ Ns ที่แล้ว)"; ถ้าเคยมีช่วงแอปปิด จะมี "⚠️ ไม่ได้เฝ้าช่วง HH:MM–HH:MM"
 - **10 events ล่าสุด** — เวลา · tier · actor — kind แถว ORG/REMOTE มีเมนูย่อย **Kill** และ **เปิดตำแหน่ง**
-- **Trust แอปนี้… / ยกเลิก trust** — จัดการ allowlist (actor ที่ trust จะลง log แต่ไม่แจ้ง)
+- **Trust แอปนี้… / ยกเลิก trust** — จัดการ allowlist (actor ที่ trust จะลง log แต่ไม่แจ้ง เว้นแต่ match org pattern ก่อน)
 - **Test alert** — ยิง notification ครบทุก tier ให้ดูตัวอย่าง
 - **Calibration Wizard…, System Checkup…, Export รายงาน…, History…, Settings…** — ดูหัวข้อถัดไป
 - **Pause 30 นาที / 1 ชั่วโมง / หยุด pause** — pause เฉพาะ NORMAL; ORG/REMOTE แจ้งเสมอ
@@ -305,7 +309,7 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 
 - ตัวกรอง tier (segmented รวม "ซ่อน noise"), ช่วงวัน (วันนี้ / 7 / 30 / ทั้งหมด) และช่องค้นหา (actor/kind/reason)
 - แผงรายละเอียดต่อแถว (reason, rawSummary, pid, path) พร้อมปุ่ม **Trust**, **Kill** (แถว ORG/REMOTE) และ **เปิดตำแหน่ง** ตามความเหมาะสม
-- refresh ตอนเปิดและทุก 5 วินาที; ปุ่ม **Export…** สำหรับช่วงที่เลือก
+- refresh ตอนเปิดและทุก 5 วินาที; ปุ่ม **Export…** เปิดหน้าต่าง export (ช่วง 7 วัน / 30 วัน / ทั้งหมด แบบตายตัว)
 
 ## Settings
 
@@ -348,7 +352,7 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 | Key | ค่าเริ่มต้น | ความหมาย |
 |---|---|---|
 | `language` | `"th"` | `"th"` หรือ `"en"` — ทั้ง UI และ notification |
-| `sound` | `true` | เสียงกับ notification NORMAL (ORG/REMOTE มีเสียงเสมอ) |
+| `sound` | `true` | เสียงสำหรับ notification NORMAL และของระบบ (gap, auto-kill); ORG/REMOTE มีเสียงเสมอ |
 | `bannerOnForRemote` | `true` | แบนเนอร์แดงสำหรับ REMOTE |
 | `bannerLevel` | `"screenSaver"` | ระดับหน้าต่างแบนเนอร์: `"floating"` หรือ `"screenSaver"` |
 | `orgBannerCooldownSeconds` | `60` | cooldown แบนเนอร์ต่อ actor (ORG) |
@@ -413,7 +417,7 @@ make uninstall                 # หยุด + ลบแอปและ LaunchA
 ## แก้ปัญหาเบื้องต้น
 
 - **ไม่มี notification** — เช็ค System Settings ▸ Notifications ▸ NoPeek; ถ้าปฏิเสธ เมนูจะขึ้น *"notification ปิด — แบนเนอร์ยังทำงาน"* และแบนเนอร์ ORG/REMOTE ยังทำงานอยู่ดี
-- **โล่เหลือง / degraded** — child process `log stream` ตาย NoPeek ลองใหม่เอง (backoff 1→30 วิ รีเซ็ตเมื่อรันเสถียรครบหนึ่งนาที) และบันทึก `monitor-degraded`/`monitor-recovered` ถ้าเหลืองค้าง: `launchctl print gui/$(id -u)/com.sinsombat.nopeek`, `pgrep -fl "log stream"` แล้วเมนู ▸ `Reload config` หรือ `make install` ซ้ำ
+- **โล่เหลือง / degraded** — child process `log stream` ตาย NoPeek ลองใหม่เอง (backoff 1→30 วิ รีเซ็ตเมื่อรันเสถียรครบหนึ่งนาที) และบันทึก `monitor-degraded`/`monitor-recovered` ถ้าเหลืองค้าง: `launchctl print gui/$(id -u)/com.sinsombat.nopeek`, `pgrep -fl "log stream"` แล้ว `make install` ซ้ำ (หรือปิด–เปิดแอปใหม่) — `Reload config` ไม่ได้ restart reader
 - **ตอน build เห็น `ld: warning: search path '…CommandLineTools…'`** — เป็นเสียงรบกวนปกติของเครื่องที่ใช้ Command Line Tools เดียว ไม่ใช่ปัญหาของ NoPeek (โค้ดบิลด์ไม่มี warning) Makefile จัดการ quirk ของ `swift test` บน CLT-only ให้แล้ว
 - **ไม่จับอะไรเลย** — รัน Calibration Wizard + System Checkup; เช็คว่าสิ่งที่คุณรออยู่นั้นเป็น system noise แบบ `WindowManager` หรือเปล่า (ลง log อย่างเดียวโดยออกแบบ); จำไว้ว่า `allowlist` และ `replaceDefaultLists` เปลี่ยนสิ่งที่รายงาน
 - **⌘⇧5 ครั้งเดียวได้ 2 notification** — พฤติกรรมที่รู้อยู่ของ v1: ทั้ง `screencapture` และ `replayd` ลง log แล้ว throttle จัดกลุ่มแยกตาม actor; trust ตัวใดตัวหนึ่งให้เงียบได้
@@ -430,4 +434,4 @@ make install  # → ~/Applications/NoPeek.app + LaunchAgent เริ่มท�
 make uninstall
 ```
 
-แอปถูกเซ็น ad-hoc (`codesign -s -`) บนเครื่องคุณ — จึงไม่ถูก quarantine และไม่ต้องใช้ entitlement ใด ๆ สิทธิ์เดียวที่มันขอคือ notification ตอนเปิดครั้งแรก ไม่มี Screen Recording, ไม่มี Accessibility, ไม่มี Full Disk Access — และไม่มีการส่งข้อมูลออกเครือข่ายเลย
+แอปถูกเซ็น ad-hoc (`codesign -s -`) บนเครื่องคุณ — แอปที่ build เองในเครื่องไม่ถูก quarantine และไม่ต้องใช้ entitlement ใด ๆ สิทธิ์เดียวที่มันขอคือ notification ตอนเปิดครั้งแรก ไม่มี Screen Recording, ไม่มี Accessibility, ไม่มี Full Disk Access — และไม่มีการส่งข้อมูลออกเครือข่ายเลย

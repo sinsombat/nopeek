@@ -25,10 +25,14 @@ import PWCore
 /// The permission result is cached in `isDenied` so the menu can show the
 /// spec §6 warning ("notification ปิด — แบนเนอร์ยังทำงาน").
 ///
-/// **Sound (T23).** Whether a notification plays a sound is read from the
-/// injected `sound` closure on every post, so the Settings window's sound
-/// toggle takes effect on the next notification without a relaunch — the same
-/// live-config pattern the pipeline's `remoteBannerEnabled` closure uses.
+/// **Sound (T23 + spec §6 tier table).** ORG and REMOTE notifications always
+/// carry the default sound — an org/remote alert is not something the sound
+/// setting may mute into silence. Everything else (NORMAL, and the tier-less
+/// monitor-health / auto-kill notices) plays the default sound only while the
+/// injected `sound` closure says so. The closure is read on every post, so the
+/// Settings window's sound toggle takes effect on the next notification without
+/// a relaunch — the same live-config pattern the pipeline's
+/// `remoteBannerEnabled` closure uses.
 @MainActor
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
@@ -165,21 +169,28 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Core post (F3): the caller decides the grouping thread, and — for the
     /// alerts that carry actions (spec §6) — the category and the `userInfo`
     /// its actions need.
+    ///
+    /// - Parameter sound: `true` forces the default sound, `false` forces
+    ///   silence, `nil` (the default) follows the live `sound` closure. The
+    ///   tier-based post passes `true` for ORG/REMOTE (spec §6: those alerts
+    ///   always sound); a tier-less post leaves it `nil`.
     func post(
         title: String,
         body: String,
         threadID: String,
         categoryID: String? = nil,
-        userInfo: [String: Any] = [:]
+        userInfo: [String: Any] = [:],
+        sound: Bool? = nil
     ) {
         guard let center else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        // Live config (T23): the Settings window's sound toggle is read here,
-        // per post, so turning it off silences the very next notification.
-        content.sound = sound() ? .default : nil
+        // Live config (T23): unless the caller forces it (ORG/REMOTE), the
+        // Settings window's sound toggle is read here, per post, so turning it
+        // off silences the very next notification.
+        content.sound = (sound ?? self.sound()) ? .default : nil
         content.threadIdentifier = threadID
         if let categoryID {
             content.categoryIdentifier = categoryID
@@ -200,13 +211,18 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// Convenience post (F3): groups by tier as `nopeek-<tier>` and attaches
     /// the action-carrying `nopeek-alert` category to the REMOTE and ORG tiers
     /// (spec §6) — the tiers whose rows have `Kill` / `เปิดตำแหน่ง` in the menu.
+    ///
+    /// Sound follows the spec §6 tier table: ORG and REMOTE always carry it
+    /// (forced here, never muted by the `sound` setting); NORMAL follows the
+    /// live `sound` closure.
     func post(title: String, body: String, tier: Tier, userInfo: [String: Any] = [:]) {
         post(
             title: title,
             body: body,
             threadID: Self.threadID(for: tier),
             categoryID: Self.carriesAlertActions(tier) ? Self.alertCategoryID : nil,
-            userInfo: userInfo
+            userInfo: userInfo,
+            sound: Self.carriesAlertActions(tier) ? true : nil
         )
     }
 

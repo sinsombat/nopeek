@@ -1006,9 +1006,10 @@ final class AppController: @unchecked Sendable {
     /// Posts the tier's notification on the main actor (`NotificationService`
     /// is `@MainActor`). Copy comes from `Strings` in the configured language
     /// (spec §6/§10) — title and body per tier, with actor + kind in the body —
-    /// and the thread id groups per tier (R10). The three identity fields travel
-    /// in `userInfo`, which is what the T21 actions (`Kill` / `เปิดตำแหน่ง`)
-    /// read back.
+    /// and the tier-based post groups by `nopeek-<tier>` (R10) and resolves the
+    /// spec §6 sound policy (ORG/REMOTE always sound; the rest follows the
+    /// `sound` setting). The three identity fields travel in `userInfo`, which
+    /// is what the T21 actions (`Kill` / `เปิดตำแหน่ง`) read back.
     private func postNotification(for event: ClassifiedEvent) {
         let language = Language(rawValue: configStore.config.language) ?? Strings.defaultLanguage
         guard let copy = Strings.notificationCopy(for: event, language: language) else { return }
@@ -1025,10 +1026,7 @@ final class AppController: @unchecked Sendable {
             notifications.post(
                 title: copy.title,
                 body: copy.body,
-                threadID: NotificationService.threadID(for: tier),
-                categoryID: NotificationService.carriesAlertActions(tier)
-                    ? NotificationService.alertCategoryID
-                    : nil,
+                tier: tier,
                 userInfo: userInfo
             )
         }

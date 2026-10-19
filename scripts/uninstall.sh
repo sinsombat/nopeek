@@ -44,8 +44,11 @@ fi
 
 echo "==> stopping $DOMAIN/$LABEL"
 if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-    echo "    booted out"
+    if launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null; then
+        echo "    booted out"
+    else
+        echo "    warning: launchctl bootout failed — the service may still be loaded" >&2
+    fi
 else
     echo "    not loaded — nothing to stop"
 fi
@@ -68,6 +71,19 @@ fi
 if pgrep -x "$EXECUTABLE_NAME" >/dev/null; then
     echo "    $EXECUTABLE_NAME ignored SIGTERM — SIGKILL"
     pkill -9 -x "$EXECUTABLE_NAME" 2>/dev/null || true
+    for _ in $(seq 1 8); do
+        pgrep -x "$EXECUTABLE_NAME" >/dev/null || break
+        sleep 0.25
+    done
+fi
+
+# Final gate before anything is deleted: a surviving process means launchd (a
+# stale KeepAlive job) or the kernel is respawning/holding it, and removing the
+# bundle now would leave a running copy behind for the next install to trip on.
+if pgrep -x "$EXECUTABLE_NAME" >/dev/null; then
+    echo "error: $EXECUTABLE_NAME is still running after SIGKILL — nothing was removed." >&2
+    echo "       a KeepAlive job may be respawning it; check: launchctl print $DOMAIN/$LABEL" >&2
+    exit 1
 fi
 
 # --- 2./3. remove what the installer wrote ------------------------------------
