@@ -126,6 +126,20 @@ final class AppController: @unchecked Sendable {
     /// window and views are only created by `show()`.
     @MainActor let exportPanel: ExportPanelController
 
+    // MARK: - History (T22, spec §6b)
+
+    /// The History window (spec §6b): the evidence log read back as a
+    /// filterable, browsable table. Built here — on the main thread, like
+    /// everything a window touches — while its window and views are only created
+    /// by `show()`; the reads themselves run off the main thread inside it.
+    ///
+    /// It takes the log's *directory*, not the app's `EvidenceLog` instance:
+    /// `EvidenceLog` is deliberately not `Sendable` (T8's single-owner
+    /// contract), and this window must read off the main thread, so each read
+    /// builds a read-only instance over the same directory — the read path the
+    /// T20 exporter already travels.
+    @MainActor let historyWindow: HistoryWindowController
+
     // MARK: - Kill (T21, spec §6d)
 
     /// The signal engine (stateless): the pid-reuse guard, `SIGTERM` → wait →
@@ -309,6 +323,15 @@ final class AppController: @unchecked Sendable {
         self.exporter = exporter
         self.exportPanel = ExportPanelController(exporter: exporter, language: language)
 
+        // The History window (T22, spec §6b): the evidence log read back with
+        // filters. It reads the directory rather than the app's `EvidenceLog`
+        // (see the property's note) and takes the language closure like the
+        // other windows.
+        self.historyWindow = HistoryWindowController(
+            logDirectory: Self.defaultLogDirectory,
+            language: language
+        )
+
         // The kill engine and the auto-kill loop guard (T21, spec §6d). The
         // engine is stateless; the guard's quota is the config value at launch
         // (T23's live apply rebuilds it when `autoKillMaxPerHour` changes — the
@@ -357,6 +380,22 @@ final class AppController: @unchecked Sendable {
         // the main actor.
         notifications.onAction = { [weak self] action in
             Task { await self?.handleNotificationAction(action) }
+        }
+
+        // Also last, for the same reason: the History window's three actions are
+        // the app's own flows, never re-implemented in the window — `Trust` is
+        // the menu's allowlist write, `Kill…` is the T21 confirm-and-kill, and
+        // `Export…` opens the T20 panel. The window renders them and shows what
+        // they returned.
+        historyWindow.onTrust = { [weak self] actor in
+            try self?.trust(actor)
+        }
+        historyWindow.onKill = { [weak self] target in
+            guard let self else { return nil }
+            return await self.confirmAndKill(target)
+        }
+        historyWindow.onExport = { [weak self] in
+            self?.runExport()
         }
     }
 
@@ -566,6 +605,16 @@ final class AppController: @unchecked Sendable {
     @MainActor
     func runExport() {
         exportPanel.show()
+    }
+
+    // MARK: - History (T22, spec §6b)
+
+    /// Opens the History window (spec §6b `History…`): the evidence log as a
+    /// filterable table, refreshed while it is open. Main thread only — the
+    /// window is AppKit — while its log reads run off the main thread inside it.
+    @MainActor
+    func runHistory() {
+        historyWindow.show()
     }
 
     // MARK: - Kill (T21, spec §6d)

@@ -259,6 +259,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.runExport()
     }
 
+    /// Spec §6b `History…`: the evidence log read back with filters, refreshed
+    /// while the window is open (T22).
+    @objc func runHistory(_ sender: Any?) {
+        controller.runHistory()
+    }
+
     @objc func pauseThirtyMinutes(_ sender: Any?) {
         controller.pause(for: 30 * 60)
         updateIcon()

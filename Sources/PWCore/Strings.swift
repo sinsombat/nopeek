@@ -153,6 +153,7 @@ public enum Strings {
         "menu.calibration": [.th: "Calibration Wizard…", .en: "Calibration Wizard…"],
         "menu.checkup": [.th: "System Checkup…", .en: "System Checkup…"],
         "menu.export": [.th: "Export รายงาน…", .en: "Export report…"],
+        "menu.history": [.th: "History…", .en: "History…"],
         "menu.openLog": [.th: "เปิดโฟลเดอร์ log", .en: "Open log folder"],
         "menu.openConfig": [.th: "เปิด config", .en: "Open config"],
         "menu.reloadConfig": [.th: "Reload config", .en: "Reload config"],
@@ -361,6 +362,65 @@ public enum Strings {
         "export.savedTo": [.th: "บันทึกไว้ที่ %@", .en: "Saved to %@"],
         "export.reveal": [.th: "เปิดใน Finder", .en: "Reveal in Finder"],
         "export.button.close": [.th: "ปิด", .en: "Close"],
+
+        // MARK: History (T22, spec §6b)
+
+        // Window title; like the wizard's, the checkup's and the export's, `th`
+        // keeps the English jargon name it is opened by in the menu.
+        "history.title": [.th: "History", .en: "History"],
+        "history.intro": [
+            .th: "ประวัติการแจ้งเตือนจาก evidence log — ใหม่สุดก่อน อ่านเฉพาะ events ที่ยังอยู่ใน retention",
+            .en: "Every event in the evidence log, newest first — only what retention still holds",
+        ],
+        // The tier filter (spec §6b): one segment per choice. The three
+        // single-tier segments are labelled with the pinned tier literals
+        // (ORG/REMOTE/NORMAL, the same spelling the log and the menu rows use)
+        // and never go through this table; only "ทั้งหมด" is copy.
+        "history.tier.all": [.th: "ทั้งหมด", .en: "All"],
+        // The `ซ่อน noise` switch (spec §6b) — SYSTEM_NOISE + ALLOWLIST.
+        "history.hideNoise": [.th: "ซ่อน noise", .en: "Hide noise"],
+        // The four range presets, in segmented order (spec §6b).
+        "history.range.today": [.th: "วันนี้", .en: "Today"],
+        "history.range.7d": [.th: "7 วัน", .en: "7 days"],
+        "history.range.30d": [.th: "30 วัน", .en: "30 days"],
+        "history.range.all": [.th: "ทั้งหมด", .en: "All"],
+        "history.search.placeholder": [
+            .th: "ค้นหา actor / kind / reason",
+            .en: "Search actor / kind / reason",
+        ],
+        // The live count line above the table; the second line replaces it when
+        // the filters match nothing at all.
+        "history.summary": [.th: "แสดง %@ จาก %@ events", .en: "Showing %@ of %@ events"],
+        "history.empty": [
+            .th: "ไม่พบ event ที่ตรงกับตัวกรองนี้",
+            .en: "No event matches these filters",
+        ],
+        // The table's column headers — the spec §6b row (เวลา / tier / actor /
+        // kind / count), with the count column showing `×N` through the menu
+        // row's own key when a throttled burst was folded in.
+        "history.col.time": [.th: "เวลา", .en: "Time"],
+        "history.col.tier": [.th: "tier", .en: "Tier"],
+        "history.col.actor": [.th: "actor", .en: "Actor"],
+        "history.col.kind": [.th: "kind", .en: "Kind"],
+        "history.col.count": [.th: "count", .en: "Count"],
+        // The detail area (spec §6b: reason, rawSummary, pid, actorPath) and
+        // the sentence that stands in until a row is selected.
+        "history.none.selected": [
+            .th: "เลือกแถวเพื่อดูรายละเอียด",
+            .en: "Select a row to see its details",
+        ],
+        "history.detail.reason": [.th: "เหตุผล: %@", .en: "Reason: %@"],
+        "history.detail.raw": [.th: "rawSummary: %@", .en: "rawSummary: %@"],
+        "history.detail.pid": [.th: "pid: %@", .en: "pid: %@"],
+        "history.detail.path": [.th: "actorPath: %@", .en: "actorPath: %@"],
+        // What a field with no value reads as (a `nil` rawSummary, pid or path).
+        "history.detail.none": [.th: "—", .en: "—"],
+        // The row actions (spec §6b) and the footer. `เปิดตำแหน่ง` deliberately
+        // reuses the menu's key: reveal means one thing in this app.
+        "history.button.trust": [.th: "Trust", .en: "Trust"],
+        "history.button.kill": [.th: "Kill…", .en: "Kill…"],
+        "history.button.export": [.th: "Export…", .en: "Export…"],
+        "history.button.close": [.th: "ปิด", .en: "Close"],
 
         // MARK: Kill & auto-kill (T21, spec §6d)
 

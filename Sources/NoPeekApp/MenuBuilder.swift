@@ -111,6 +111,17 @@ final class MenuBuilder {
             )
         )
 
+        // Spec §6: `History…` — the evidence log read back as a filterable table
+        // (T22, §6b), straight after the export so the two actions that look at
+        // the log over time sit together.
+        menu.addItem(
+            actionRow(
+                Strings.t("menu.history", language),
+                #selector(StatusItemController.runHistory(_:)),
+                target
+            )
+        )
+
         menu.addItem(.separator())
 
         // Spec §6: `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`. The timed rows

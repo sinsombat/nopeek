@@ -159,6 +159,19 @@ import PWCore
             "notif.autokill.escalated.body",
             "notif.autokill.denied.title", "notif.autokill.denied.body",
             "notif.autokill.halted.title", "notif.autokill.halted.body",
+            // T22's History window: the menu row, the four filters, the table's
+            // five headers, the count/empty lines, the detail area and the four
+            // buttons (`เปิดตำแหน่ง` reuses T21's `menu.event.reveal`).
+            "menu.history",
+            "history.title", "history.intro", "history.tier.all", "history.hideNoise",
+            "history.range.today", "history.range.7d", "history.range.30d", "history.range.all",
+            "history.search.placeholder", "history.summary", "history.empty",
+            "history.col.time", "history.col.tier", "history.col.actor",
+            "history.col.kind", "history.col.count",
+            "history.none.selected", "history.detail.reason", "history.detail.raw",
+            "history.detail.pid", "history.detail.path", "history.detail.none",
+            "history.button.trust", "history.button.kill",
+            "history.button.export", "history.button.close",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")
