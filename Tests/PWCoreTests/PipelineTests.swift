@@ -237,6 +237,50 @@ import PWCore
         ])
     }
 
+    // MARK: - Live classifier swap (T23)
+
+    @Test func testSetClassifierSwapsTheRulesInPlace() {
+        // The app rebuilds the `Classifier` when the config changes (T23) and
+        // hands it to the pipeline that is already running: no new pipeline,
+        // no lost state. The swap must apply to the *next* event, both ways —
+        // a name that just joined the watchlist becomes REMOTE, and a rule the
+        // new classifier does not carry is gone (a merge would keep it).
+        let (pipeline, _, recorder, _) = makePipeline()
+
+        // An actor nobody knows: NORMAL — logged, notified, trayed, no banner.
+        let beforeRaw = raw(actor: "before-swap")
+        pipeline.handle(beforeRaw)
+        let before = Classifier(remote: ["screensharingd"]).classify(beforeRaw)
+        #expect(before.tier == .normal)
+        #expect(recorder.actions == [.appendLog(before), .notify(before), .trayUpdate(before)])
+
+        // Swap in a classifier that watches a brand-new name — and does *not*
+        // carry the remote watchlist the old one had.
+        let swapped = Classifier(remote: ["new-agent"])
+        pipeline.setClassifier(swapped)
+        recorder.reset()
+
+        let joinedRaw = raw(actor: "new-agent")
+        pipeline.handle(joinedRaw)
+        let joined = swapped.classify(joinedRaw)
+        #expect(joined.tier == .remote)
+        #expect(recorder.actions == [
+            .appendLog(joined),
+            .notify(joined),
+            .banner(joined),
+            .trayUpdate(joined),
+        ])
+
+        // The replaced rule is really gone: `screensharingd` classified REMOTE
+        // before the swap and is NORMAL after it.
+        recorder.reset()
+        let droppedRaw = raw(actor: "screensharingd")
+        pipeline.handle(droppedRaw)
+        let dropped = swapped.classify(droppedRaw)
+        #expect(dropped.tier == .normal)
+        #expect(recorder.actions == [.appendLog(dropped), .notify(dropped), .trayUpdate(dropped)])
+    }
+
     // MARK: - Throttler gates `.notify` only
 
     @Test func testAggregatedActionAfterThrottle() {

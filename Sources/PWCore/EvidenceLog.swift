@@ -195,19 +195,25 @@ public final class EvidenceLog {
 
     /// Deletes log files that have fallen out of the retention window.
     ///
-    /// Retention is counted in whole local days: with `retentionDays` = N, the
-    /// files for today and the N-1 days before it survive. A file's day comes
-    /// from its name, or from its modification day when the name does not
-    /// parse. `retentionDays` is clamped to at least 1 so the file currently
-    /// being appended to can never be purged out from under the app. Only
-    /// `events-*.ndjson` files are considered; everything else in the
-    /// directory is left untouched.
+    /// Retention is counted in whole local days: with N days kept, the files
+    /// for today and the N-1 days before it survive. A file's day comes from
+    /// its name, or from its modification day when the name does not parse.
+    /// The count is clamped to at least 1 so the file currently being appended
+    /// to can never be purged out from under the app. Only `events-*.ndjson`
+    /// files are considered; everything else in the directory is left
+    /// untouched.
     ///
-    /// Called at startup (T21) before the gap check, so the gap check does not
+    /// `keepingDays` overrides the instance's own `retentionDays` (T23: the
+    /// Settings window's `Purge now` passes the value **saved in the config**,
+    /// which a live change may have moved on from — this instance's
+    /// `retentionDays` is only the value it was built with). `nil` — the
+    /// default, and every pre-T23 call site — keeps the original semantics.
+    ///
+    /// Called at startup (T24) before the gap check, so the gap check does not
     /// see files it is about to delete.
-    public func purgeOldFiles() {
+    public func purgeOldFiles(keepingDays days: Int? = nil) {
         let calendar = Calendar.current
-        let retained = max(retentionDays, 1)
+        let retained = max(days ?? retentionDays, 1)
         guard let cutoff = calendar.date(
             byAdding: .day,
             value: -(retained - 1),

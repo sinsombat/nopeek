@@ -24,6 +24,11 @@ import PWCore
 ///
 /// The permission result is cached in `isDenied` so the menu can show the
 /// spec §6 warning ("notification ปิด — แบนเนอร์ยังทำงาน").
+///
+/// **Sound (T23).** Whether a notification plays a sound is read from the
+/// injected `sound` closure on every post, so the Settings window's sound
+/// toggle takes effect on the next notification without a relaunch — the same
+/// live-config pattern the pipeline's `remoteBannerEnabled` closure uses.
 @MainActor
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
@@ -61,7 +66,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     /// warning item while this is set.
     private(set) var isDenied = false
 
-    override init() {
+    /// Whether a post should play the default sound, read **live per post**
+    /// (T23): the app points this at `configStore.config.sound`, so the
+    /// Settings toggle applies without a relaunch. Defaults to `true`, the
+    /// spec §7 value, for a caller that does not wire a config.
+    private let sound: () -> Bool
+
+    init(sound: @escaping () -> Bool = { true }) {
+        self.sound = sound
         if Bundle.main.bundleIdentifier == nil {
             center = nil
         } else {
@@ -165,7 +177,9 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        // Live config (T23): the Settings window's sound toggle is read here,
+        // per post, so turning it off silences the very next notification.
+        content.sound = sound() ? .default : nil
         content.threadIdentifier = threadID
         if let categoryID {
             content.categoryIdentifier = categoryID

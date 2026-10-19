@@ -122,6 +122,17 @@ final class MenuBuilder {
             )
         )
 
+        // Spec §6: `Settings…` — the config file as a validated form (T23,
+        // §6c), the last window row in the spec §6 menu order (after History,
+        // before the pause controls).
+        menu.addItem(
+            actionRow(
+                Strings.t("menu.settings", language),
+                #selector(StatusItemController.runSettings(_:)),
+                target
+            )
+        )
+
         menu.addItem(.separator())
 
         // Spec §6: `Pause 30 นาที / 1 ชั่วโมง / หยุด pause`. The timed rows

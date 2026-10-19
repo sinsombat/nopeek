@@ -422,6 +422,116 @@ public enum Strings {
         "history.button.export": [.th: "Export…", .en: "Export…"],
         "history.button.close": [.th: "ปิด", .en: "Close"],
 
+        // MARK: Settings (T23, spec §6c)
+
+        // The menu row (spec §6 spells it `Settings…`) and the window title;
+        // like the wizard's and the checkup's, `th` keeps the English jargon
+        // name it is opened by.
+        "menu.settings": [.th: "Settings…", .en: "Settings…"],
+        "settings.title": [.th: "Settings", .en: "Settings"],
+        "settings.intro": [
+            .th: "แก้ค่า config ของ NoPeek — ค่าที่ผิดช่วงจะไม่ถูกบันทึก",
+            .en: "Edit NoPeek's config — a value out of range is never saved",
+        ],
+        "settings.section.general": [.th: "ทั่วไป", .en: "General"],
+        "settings.section.lists": [
+            .th: "รายการที่ใช้จับ (เพิ่มจากชุด default)",
+            .en: "Detection lists (added to the built-ins)",
+        ],
+        "settings.section.autokill": [.th: "Auto-kill", .en: "Auto-kill"],
+        "settings.language": [.th: "ภาษา", .en: "Language"],
+        "settings.language.th": [.th: "ไทย", .en: "Thai"],
+        "settings.language.en": [.th: "English", .en: "English"],
+        "settings.sound": [.th: "เสียงกับ notification", .en: "Sound with notifications"],
+        "settings.bannerOnForRemote": [
+            .th: "แบนเนอร์สำหรับ REMOTE",
+            .en: "Banner for REMOTE events",
+        ],
+        "settings.bannerLevel": [.th: "ระดับแบนเนอร์", .en: "Banner level"],
+        // The two spec §6 level literals: config values, not translations.
+        "settings.level.floating": [.th: "floating", .en: "floating"],
+        "settings.level.screenSaver": [.th: "screenSaver", .en: "screenSaver"],
+        "settings.cooldown": [
+            .th: "cooldown แบนเนอร์ ORG (วินาที, 0–3600)",
+            .en: "Org banner cooldown (seconds, 0–3600)",
+        ],
+        "settings.gap": [
+            .th: "เตือนเมื่อไม่เฝ้านาน (นาที, 1–1440)",
+            .en: "Gap alert threshold (minutes, 1–1440)",
+        ],
+        "settings.retention": [
+            .th: "เก็บ log (วัน, 1–365)",
+            .en: "Keep logs (days, 1–365)",
+        ],
+        // Spec §6c's purge button, used with the retention that is *saved*.
+        "settings.purge": [.th: "Purge now", .en: "Purge now"],
+        "settings.purge.done": [
+            .th: "🧹 ลบ log ที่เกิน %@ วันแล้ว",
+            .en: "🧹 Purged everything past %@ days",
+        ],
+        // The five list areas, labelled by their config key (the file is what
+        // a power user will read next to the window).
+        "settings.list.orgPatterns": [
+            .th: "orgPatterns — pattern องค์กร/RMM (substring ของชื่อหรือ path)",
+            .en: "orgPatterns — org/RMM patterns (substring of name or path)",
+        ],
+        "settings.list.remoteControlExtra": [
+            .th: "remoteControlExtra — ชื่อ/pattern ของโปรแกรมควบคุมระยะไกล",
+            .en: "remoteControlExtra — remote-control process names/patterns",
+        ],
+        "settings.list.systemNoiseExtra": [
+            .th: "systemNoiseExtra — pattern ของระบบ (log ไว้ ไม่แจ้ง)",
+            .en: "systemNoiseExtra — system chatter (logged, never notified)",
+        ],
+        "settings.list.allowlist": [
+            .th: "allowlist — แอปที่ trust (path หรือชื่อ process)",
+            .en: "allowlist — trusted actors (path or process name)",
+        ],
+        "settings.list.autoKillNames": [
+            .th: "autoKillNames — ชื่อ process ที่ให้ฆ่า (ต้องใส่ทีละตัว)",
+            .en: "autoKillNames — process names auto-kill may kill",
+        ],
+        "settings.list.hint": [
+            .th: "บรรทัดละรายการ — บรรทัดว่างและรายการซ้ำจะถูกตัดออก",
+            .en: "One entry per line — blank lines and duplicates are dropped",
+        ],
+        "settings.autokill.enabled": [.th: "เปิด auto-kill", .en: "Enable auto-kill"],
+        "settings.autokill.maxPerHour": [
+            .th: "ฆ่าสูงสุดต่อชื่อ (ครั้ง/ชั่วโมง, 1–100)",
+            .en: "Max kills per name (per hour, 1–100)",
+        ],
+        "settings.save": [.th: "บันทึก", .en: "Save"],
+        "settings.saved": [.th: "✅ บันทึกแล้ว", .en: "✅ Saved"],
+        // Spec §6c: `เปิดไฟล์ config` stays for power users. Its own key
+        // because the window spells it as a button, not as the menu's row.
+        "settings.openConfig": [.th: "เปิดไฟล์ config", .en: "Open config file"],
+        "settings.close": [.th: "ปิด", .en: "Close"],
+        // One per validatable field (spec §6c's ranges), plus the one the
+        // ranges cannot cover: a field that is not a number at all. Each
+        // states its rule, so an inline error is actionable on its own.
+        "settings.error.language": [.th: "ต้องเป็น th หรือ en", .en: "Must be th or en"],
+        "settings.error.bannerLevel": [
+            .th: "ต้องเป็น floating หรือ screenSaver",
+            .en: "Must be floating or screenSaver",
+        ],
+        "settings.error.cooldown": [
+            .th: "ต้องอยู่ 0–3600 วินาที",
+            .en: "Must be 0–3600 seconds",
+        ],
+        "settings.error.gap": [
+            .th: "ต้องอยู่ 1–1440 นาที",
+            .en: "Must be 1–1440 minutes",
+        ],
+        "settings.error.retention": [
+            .th: "ต้องอยู่ 1–365 วัน",
+            .en: "Must be 1–365 days",
+        ],
+        "settings.error.maxPerHour": [
+            .th: "ต้องอยู่ 1–100 ครั้ง/ชั่วโมง",
+            .en: "Must be 1–100 per hour",
+        ],
+        "settings.error.number": [.th: "ต้องเป็นตัวเลข", .en: "Must be a number"],
+
         // MARK: Kill & auto-kill (T21, spec §6d)
 
         // The two tray-row actions (spec §6: REMOTE/ORG rows carry `Kill`;

@@ -265,6 +265,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.runHistory()
     }
 
+    /// Spec §6c `Settings…`: the config file as a validated form (T23). Its
+    /// save applies live — the store's change notification is what rebuilds
+    /// the classifier, so nothing has to be refreshed here.
+    @objc func runSettings(_ sender: Any?) {
+        controller.runSettings()
+    }
+
     @objc func pauseThirtyMinutes(_ sender: Any?) {
         controller.pause(for: 30 * 60)
         updateIcon()

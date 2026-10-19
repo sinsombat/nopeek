@@ -505,4 +505,67 @@ import PWCore
         #expect(reread.autoKillMaxPerHour == 3)
         #expect(store.config == reread)
     }
+
+    // MARK: - Concurrency (ruling R22)
+
+    @Test func testConcurrentUpdatesLoseNothing() async throws {
+        // R22: `update` is a read-modify-write over the whole config, so two
+        // callers that interleave could each apply their mutation to the same
+        // base and the second write would drop the first caller's change. The
+        // store now serializes the read → mutate → write → reload on its own
+        // watch queue; 100 concurrent updates that each append one distinct
+        // entry must therefore all survive, in the file and in memory.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+        let url = directory.appendingPathComponent("config.json")
+
+        let store = ConfigStore(url: url) { _ in }
+        store.load() // missing file → the default file is written
+
+        let count = 100
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<count {
+                group.addTask {
+                    // Each task writes its own value; `try?` is honest here —
+                    // a failure would surface as a missing entry below.
+                    try? store.update { config in
+                        config.orgPatterns.append("agent-\(index)")
+                    }
+                }
+            }
+        }
+
+        let expected = Set((0..<count).map { "agent-\($0)" })
+        #expect(store.config.orgPatterns.count == count)
+        #expect(Set(store.config.orgPatterns) == expected)
+
+        // `config` reports what is on disk (ruling F2): the file holds every
+        // entry too, not just the in-memory copy.
+        let onDisk = try Self.decodeConfig(at: url)
+        #expect(onDisk.orgPatterns.count == count)
+        #expect(Set(onDisk.orgPatterns) == expected)
+        #expect(store.lastError == nil)
+    }
+
+    @Test func testConcurrentUpdatesSerializeTheirCallbacks() async throws {
+        // The same serialization point orders `onChange` too: a caller that
+        // makes two updates back-to-back cannot see its second update's
+        // callback arrive before its first (observers would otherwise apply a
+        // stale config last). Serialized callbacks are FIFO, so the recorded
+        // values must follow the appends.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+        let url = directory.appendingPathComponent("config.json")
+
+        let recorder = CallbackRecorder()
+        let store = ConfigStore(url: url) { recorder.record($0) }
+        store.load()
+
+        for index in 0..<20 {
+            try store.update { $0.orgPatterns.append("step-\(index)") }
+        }
+
+        #expect(recorder.count == 20)
+        #expect(recorder.last?.orgPatterns == (0..<20).map { "step-\($0)" })
+    }
 }

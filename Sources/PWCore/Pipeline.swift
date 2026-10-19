@@ -72,10 +72,18 @@ public enum Action: Equatable, Sendable {
 /// **Threading.** `Throttler` is not thread-safe (T7), so `handle(_:)` must be
 /// called from **one serial queue** — in the app that is the log-stream
 /// reader's callback queue (T12). The sink and `remoteBannerEnabled` closures
-/// run synchronously in `handle` on that same queue. `setPaused(_:)` and
-/// `isPaused` are lock-protected and safe from any thread (the menu action in
-/// T17 runs on the main thread), which is why this class is
-/// `@unchecked Sendable`.
+/// run synchronously in `handle` on that same queue. `setPaused(_:)`,
+/// `setClassifier(_:)` and `isPaused` are lock-protected and safe from any
+/// thread (the menu action in T17 runs on the main thread), which is why this
+/// class is `@unchecked Sendable`.
+///
+/// **The classifier can be swapped in place** (T23): a config change rebuilds
+/// the `Classifier` and hands it to the running pipeline with
+/// `setClassifier(_:)`, so a new watchlist entry or allowlist actor takes
+/// effect without a relaunch and without touching the `Throttler`'s state. The
+/// swap is atomic per event: `handle` reads the current classifier once, so an
+/// event is classified wholly by the old or wholly by the new rule set — never
+/// by a mix of the two.
 ///
 /// **Performance** (Review Focus #5): one classify, at most four sink calls
 /// and one O(1) throttler step per event; a 10,000-event burst stays well
@@ -90,15 +98,18 @@ public final class Pipeline: @unchecked Sendable {
 
     // MARK: - Dependencies
 
-    private let classifier: Classifier
+    /// Tier assignment. Guarded by `lock` so `setClassifier` may run from any
+    /// thread while `handle` reads it on the pipeline's own queue.
+    private var classifier: Classifier
     private let throttler: Throttler
     private let sink: (Action) -> Void
     private let remoteBannerEnabled: () -> Bool
 
-    // MARK: - Pause state
+    // MARK: - Locked state
 
-    /// Guards `paused`. `handle` reads it once per NORMAL event; the menu
-    /// (T17) writes it from the main thread.
+    /// Guards `classifier` and `paused`. `handle` reads the classifier once at
+    /// the top of every event and `paused` once in the NORMAL branch; the menu
+    /// (T17) and the config apply (T23) write from the main/watch threads.
     private let lock = NSLock()
     private var paused = false
 
@@ -138,6 +149,24 @@ public final class Pipeline: @unchecked Sendable {
         lock.withLock { self.paused = paused }
     }
 
+    // MARK: - Classifier swap
+
+    /// Replaces the tier rules in place (T23's live apply).
+    ///
+    /// The app calls this after a config change — a Settings save, a watched
+    /// file edit, `Reload config` — with a `Classifier` rebuilt from the new
+    /// `effective*` lists, and the next event on the pipeline's queue is routed
+    /// by it. The swap is lock-protected, so it is safe from the main thread
+    /// (and from the config store's queue) while the reader's queue is inside
+    /// `handle(_:)`; each event still sees exactly one rule set.
+    ///
+    /// Nothing else is rebuilt: the `Throttler`'s state, the pause flag and the
+    /// sink all belong to the session, not to the config, and a config change
+    /// must not open a new notification window for events already grouped.
+    public func setClassifier(_ classifier: Classifier) {
+        lock.withLock { self.classifier = classifier }
+    }
+
     // MARK: - Handling
 
     /// Routes one raw event through classification, the evidence log and —
@@ -149,6 +178,9 @@ public final class Pipeline: @unchecked Sendable {
     /// Must be called from one serial queue (the Throttler contract); see the
     /// class documentation.
     public func handle(_ raw: RawEvent) {
+        // One read: the whole event is classified by whichever rule set was
+        // installed at this moment (see `setClassifier`).
+        let classifier = lock.withLock { self.classifier }
         let event = classifier.classify(raw)
 
         // Rule 1: the evidence line is unconditional and first — before any

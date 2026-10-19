@@ -10,7 +10,7 @@ import PWCore
 ///
 /// **Construction** (`AppController.shared`, main thread):
 /// `ConfigStore(~/.config/nopeek/config.json)` → `EvidenceLog(~/Library/Logs/NoPeek)`
-/// → `Classifier` (built once from the config's effective lists) →
+/// → `Classifier` (built from the config's effective lists) →
 /// `Throttler(60 s)` → `Pipeline` → `BannerPolicy` + `BannerPresenter` (T16: the
 /// red banner's per-actor cooldown and its non-activating panels) →
 /// `LogStreamReader` (default ndjson command
@@ -18,10 +18,17 @@ import PWCore
 /// watch, whose watchlist closure reads `config` live) → `MicWatch` (T15: the
 /// 2 s microphone poll). Camera detection needs no component of its own: the
 /// T14 field-test fix moved it onto the log stream (the parser's
-/// `KindRule.cameraDefaults` + the predicate's camera clauses). The
-/// `Classifier` is a *snapshot*: T23 adds the config watcher and rebuilds it on
-/// change — live reload is not wired yet, and the `ConfigStore` is deliberately
-/// not started.
+/// `KindRule.cameraDefaults` + the predicate's camera clauses).
+///
+/// **Live config (T23).** The `Classifier` is no longer a launch-time
+/// snapshot: the store's change notification — a Settings save, `Reload
+/// config`, or an edit to the file made outside the app — reaches
+/// `applyConfig(_:)`, which rebuilds the classifier and swaps it into the
+/// running pipeline, rebuilds the auto-kill engine when its quota changed, and
+/// rebuilds the banner cooldown when it did. Everything that reads the config
+/// through a closure (the remote watchlist, `bannerOnForRemote`,
+/// `bannerLevel`, the notification sound) already followed the file live.
+/// `start()` arms the file watcher and `stop()` detaches it.
 ///
 /// **Startup order** (`start()`): the `monitor-started` lifecycle line first,
 /// then the reader, then the process watch (T13: a 3 s `DispatchSourceTimer`
@@ -74,11 +81,12 @@ final class AppController: @unchecked Sendable {
 
     // MARK: - Components
 
-    /// Spec §7 config; loaded at construction, watched from T17 on.
+    /// Spec §7 config; loaded at construction, watched from T23 (`start()`).
     let configStore: ConfigStore
     /// Spec §8 evidence log, one `events-YYYY-MM-DD.ndjson` per day.
     let evidenceLog: EvidenceLog
-    /// Notification delivery (spec §6); the app's only permission.
+    /// Notification delivery (spec §6); the app's only permission. Its sound
+    /// follows `config.sound` live (T23).
     let notifications: NotificationService
 
     // MARK: - Calibration (T18, spec §6)
@@ -140,6 +148,19 @@ final class AppController: @unchecked Sendable {
     /// T20 exporter already travels.
     @MainActor let historyWindow: HistoryWindowController
 
+    // MARK: - Settings (T23, spec §6c)
+
+    /// The Settings window (spec §6c): the config file as a validated form.
+    /// Built here — on the main thread, like everything a window touches —
+    /// while its window and views are only created by `show()`.
+    ///
+    /// Its save path is `ConfigStore.update`, so a save travels exactly the
+    /// same route as an external file edit: the store's change notification
+    /// rebuilds the live components (see `applyConfig(_:)`). `Purge now` is
+    /// routed through `onPurge` to the reader's serial queue, the evidence
+    /// log's single owner.
+    @MainActor let settingsWindow: SettingsWindowController
+
     // MARK: - Kill (T21, spec §6d)
 
     /// The signal engine (stateless): the pid-reuse guard, `SIGTERM` → wait →
@@ -148,8 +169,10 @@ final class AppController: @unchecked Sendable {
 
     /// The auto-kill loop guard (spec §6d): a rolling per-name quota, so a
     /// process something respawns is not killed forever. Reachable only from the
-    /// reader's serial queue — see `autoKillIfRequested(_:)`.
-    private let autoKillEngine: AutoKillEngine
+    /// reader's serial queue — see `autoKillIfRequested(_:)`. Rebuilt by
+    /// `applyConfig(_:)` when `autoKillMaxPerHour` changes (the engine takes its
+    /// quota once, T21's pinned interface).
+    private var autoKillEngine: AutoKillEngine
 
     /// Serial queue for kill attempts. `KillController` blocks for up to its
     /// three-second wait and the admin path waits for a human, neither of which
@@ -158,15 +181,21 @@ final class AppController: @unchecked Sendable {
     private let killQueue = DispatchQueue(label: "com.sinsombat.nopeek.kill")
 
     /// The routing pipeline (T11). Built on first use — it captures `self` —
-    /// from `start()` on the main thread, before any callback can touch it.
-    private(set) lazy var pipeline: Pipeline = Pipeline(
-        classifier: classifier,
-        throttler: throttler,
-        sink: { [weak self] action in self?.perform(action) },
-        // Read live per REMOTE event, so a future config reload takes effect
-        // without rebuilding the pipeline (spec §7).
-        remoteBannerEnabled: { [weak self] in self?.configStore.config.bannerOnForRemote ?? false }
-    )
+    /// from `start()` on the main thread, before any callback can touch it,
+    /// or by the first `pipeline` use in the config apply.
+    private(set) lazy var pipeline: Pipeline = {
+        // Read under the lock: a config apply may have already swapped the
+        // classifier while this initializer was pending.
+        let classifier = classifierLock.withLock { self.classifier }
+        return Pipeline(
+            classifier: classifier,
+            throttler: throttler,
+            sink: { [weak self] action in self?.perform(action) },
+            // Read live per REMOTE event, so a config reload takes effect
+            // without rebuilding the pipeline (spec §7).
+            remoteBannerEnabled: { [weak self] in self?.configStore.config.bannerOnForRemote ?? false }
+        )
+    }()
 
     /// The `log stream` child (T5) with its default predicate — which already
     /// includes `process == "WindowManager"` for Mission Control.
@@ -175,9 +204,13 @@ final class AppController: @unchecked Sendable {
         onState: { [weak self] state in self?.readerStateChanged(state) }
     )
 
-    /// Snapshot of the classifier lists, built once from the config loaded in
-    /// `init` (T17 rebuilds it when a change lands).
-    private let classifier: Classifier
+    /// The live classifier: what the pipeline routes with and what the
+    /// auto-kill hook asks. Guarded by `classifierLock`; written by
+    /// `applyConfig(_:)` on the reader's queue and read from any queue.
+    private var classifier: Classifier
+    /// Guards `classifier`. `Pipeline.setClassifier` has its own lock, so the
+    /// two copies are swapped in one order and never observed half-updated.
+    private let classifierLock = NSLock()
     private let throttler: Throttler
     private let parser: LogLineParser
 
@@ -194,10 +227,11 @@ final class AppController: @unchecked Sendable {
     /// IO, no TCC request API (spec §3).
     private let micWatch: MicWatch
 
-    /// The red banner's per-actor cooldown (T16, spec §5). Built once from the
-    /// config `init` loaded, like the `Classifier` snapshot: T23's live reload
-    /// rebuilds it when `orgBannerCooldownSeconds` changes.
-    private let bannerPolicy: BannerPolicy
+    /// The red banner's per-actor cooldown (T16, spec §5). Rebuilt by
+    /// `applyConfig(_:)` when `orgBannerCooldownSeconds` changes — a rebuild
+    /// drops the actors' last-shown stamps, which is exactly what "apply this
+    /// cooldown now" means.
+    private var bannerPolicy: BannerPolicy
 
     /// The red banner itself (T16, spec §6): a non-activating panel per screen.
     /// Reads `bannerLevel` live on every show, so a reload changes the next
@@ -233,16 +267,30 @@ final class AppController: @unchecked Sendable {
     /// only: the menu schedules it, and its own work item clears it.
     private var pauseWork: DispatchWorkItem?
 
+    // MARK: - Live configuration (T23)
+
+    /// The config most recently applied to the live components. The reader's
+    /// queue owns it: `applyConfig(_:)` runs there, and it is how the double
+    /// notification a save produces (once for the update, once for the
+    /// watcher observing the write) collapses into one apply.
+    private var appliedConfig: NoPeekConfig?
+
     // MARK: - Init
 
     @MainActor
     private init() {
-        let notifications = NotificationService()
-        self.notifications = notifications
+        // The store's callback is fixed at construction, but the apply path
+        // needs `self` — so it goes through a relay that stays inert until the
+        // whole graph exists (see the end of this init).
+        let relay = ConfigChangeRelay()
 
-        let configStore = ConfigStore(url: Self.defaultConfigURL, onChange: { _ in })
+        let configStore = ConfigStore(url: Self.defaultConfigURL, onChange: { relay.forward($0) })
         configStore.load()
         self.configStore = configStore
+
+        // Sound is read live from the config (T23): the Settings toggle
+        // silences the next notification without a relaunch.
+        self.notifications = NotificationService(sound: { configStore.config.sound })
 
         self.classifier = Classifier(
             org: configStore.config.effectiveOrgPatterns,
@@ -332,12 +380,28 @@ final class AppController: @unchecked Sendable {
             language: language
         )
 
+        // The Settings window (T23, spec §6c): the config file as a form. The
+        // save is a `ConfigStore.update`, so the live apply below is what makes
+        // it take effect; the purge is handed to the reader's queue (the log's
+        // single owner) with the retention saved in the config.
+        let settingsWindow = SettingsWindowController(
+            configStore: configStore,
+            language: language,
+            configURL: Self.defaultConfigURL
+        )
+        self.settingsWindow = settingsWindow
+
         // The kill engine and the auto-kill loop guard (T21, spec §6d). The
         // engine is stateless; the guard's quota is the config value at launch
-        // (T23's live apply rebuilds it when `autoKillMaxPerHour` changes — the
-        // engine takes the quota once, by its pinned interface).
+        // and is rebuilt by `applyConfig(_:)` when `autoKillMaxPerHour` changes
+        // (the engine takes the quota once, by its pinned interface).
         self.killController = KillController()
         self.autoKillEngine = AutoKillEngine(maxPerHour: configStore.config.autoKillMaxPerHour)
+
+        // The live config is "applied" to start with: `init` built every
+        // component from it, so the first notification must not rebuild them
+        // for nothing.
+        self.appliedConfig = configStore.config
 
         // Wired last, when every stored property exists: the completion handler
         // is what persists the summary and records the `calibration-result`
@@ -397,6 +461,25 @@ final class AppController: @unchecked Sendable {
         historyWindow.onExport = { [weak self] in
             self?.runExport()
         }
+
+        // Also last, for the same reason: `Purge now` (spec §6c) deletes inside
+        // the log directory, which the reader's serial queue owns (T8's single
+        // owner) — the same route the other log appends take. The window passes
+        // the retention saved in the config, never the half-edited field.
+        settingsWindow.onPurge = { [weak self] days in
+            guard let self else { return }
+            let reader = self.reader
+            reader.performSerialized { [weak self] in
+                self?.evidenceLog.purgeOldFiles(keepingDays: days)
+            }
+        }
+
+        // And last of all, the relay: every stored property exists and the
+        // whole graph is wired, so a config change can now be applied. The
+        // relay holds this weakly, and the store's own closure holds the relay.
+        relay.install { [weak self] config in
+            self?.configStoreChanged(config)
+        }
     }
 
     // MARK: - Life cycle
@@ -422,6 +505,10 @@ final class AppController: @unchecked Sendable {
         // the first REMOTE/ORG notification is posted, or a notification that
         // arrives would carry no buttons.
         notifications.registerAlertCategory(language: language)
+        // Spec §7: the config file is watched from now on, so an edit made
+        // outside the app — a text editor, `cp`, the Settings window's own
+        // `ConfigStore.update` — is applied without a relaunch (T23).
+        configStore.startWatching()
         reader.start()
         startProcessWatch()
         startMicWatch()
@@ -439,10 +526,13 @@ final class AppController: @unchecked Sendable {
     }
 
     /// Stops the reader and terminates its child, so quitting the app never
-    /// leaves an orphaned `log stream` behind. Safe to call when not started.
+    /// leaves an orphaned `log stream` behind, and detaches the config watcher
+    /// (T23) so no callback can arrive during teardown. Safe to call when not
+    /// started.
     func stop() {
         stopProcessWatch()
         stopMicWatch()
+        configStore.stopWatching()
         reader.stop()
         // A run that is cut short by the app quitting is abandoned, not
         // completed: nothing is persisted (see `CalibrationService.cancel`).
@@ -504,9 +594,9 @@ final class AppController: @unchecked Sendable {
     /// `ConfigStore.update` (ruling F2). Already-trusted actors are a no-op,
     /// so a write happens only when the list really changes.
     ///
-    /// The running `Classifier` is a snapshot: the new entry takes effect when
-    /// the classifier is rebuilt (T23's live apply; until then, at the next
-    /// launch), which is why nothing here touches the pipeline.
+    /// Live since T23: the store's change notification rebuilds the classifier,
+    /// so a trusted actor stops classifying at its old tier as soon as the
+    /// write lands — not at the next launch.
     func trust(_ actor: String) throws {
         try configStore.update { config in
             guard !config.allowlist.contains(where: {
@@ -517,26 +607,97 @@ final class AppController: @unchecked Sendable {
     }
 
     /// Removes one allowlist entry (spec §6 `ยกเลิก trust`), persisted the same
-    /// way. An entry that is not present is a no-op. Same snapshot rule as
-    /// `trust(_:)`.
+    /// way. An entry that is not present is a no-op. Live like `trust(_:)`.
     func untrust(_ entry: String) throws {
         try configStore.update { config in
             config.allowlist.removeAll { $0 == entry }
         }
     }
 
-    /// Re-reads the config from disk (spec §6 `Reload config`). The classifier
-    /// and banner policy are not rebuilt here — that is T23's live-apply
-    /// wiring — so a changed list takes effect at the next launch until then.
-    /// The reload itself is recorded as the spec §8 lifecycle event
-    /// `config-reloaded`; the line is appended on the reader's serial queue,
-    /// the evidence log's single owner.
+    /// Re-reads the config from disk (spec §6 `Reload config`).
+    ///
+    /// `load()` is a read and does not notify, so the apply is called here
+    /// directly — the reload must take effect on whatever the file now holds
+    /// (T23's live apply). The reload itself is recorded as the spec §8
+    /// lifecycle event `config-reloaded`, appended on the reader's serial
+    /// queue, the evidence log's single owner; the apply records a second line
+    /// of the same kind only when the file really changed, so a *changed*
+    /// reload legitimately leaves two lines ("the user asked to reload" and
+    /// "the config changed"), while an unchanged one leaves only this one.
     func reloadConfig() {
         configStore.load()
+        configStoreChanged(configStore.config)
         let reader = self.reader
         reader.performSerialized { [weak self] in
             self?.evidenceLog.appendRaw(kind: .configReloaded)
         }
+    }
+
+    // MARK: - Live config apply (T23, spec §6c)
+
+    /// The config store's change notification: applied on the reader's serial
+    /// queue, so the rebuild is ordered exactly against the events it will
+    /// classify (the pipeline's own queue). Called for a Settings save, a menu
+    /// reload and a watched file edit alike.
+    private func configStoreChanged(_ config: NoPeekConfig) {
+        let reader = self.reader
+        reader.performSerialized { [weak self] in
+            self?.applyConfig(config)
+        }
+    }
+
+    /// Rebuilds everything that snapshots the config, then hands the new
+    /// classifier to the running pipeline.
+    ///
+    /// Runs on the reader's serial queue (see `configStoreChanged`), which is
+    /// the pipeline's single-queue contract and the auto-kill engine's single
+    /// owner, so no lock is needed for those two. The classifier copy itself is
+    /// lock-protected because `pipeline`'s lazy initializer may read it from
+    /// the main thread.
+    ///
+    /// A no-op when the config is unchanged: a save while watching notifies
+    /// twice (the update, then the watcher's own observation of the write), and
+    /// only one apply — one rebuild, one `config-reloaded` line — is honest.
+    ///
+    /// The two stateful pieces are rebuilt only when their input changed: the
+    /// `AutoKillEngine`'s quota is a rolling hour of kills-and-halts, and
+    /// resetting it on an unrelated save would forget a fight with a respawning
+    /// process; the `BannerPolicy`'s cooldown is measured from the actors'
+    /// last-shown stamps, and a *changed* cooldown is exactly when those should
+    /// be dropped.
+    private func applyConfig(_ config: NoPeekConfig) {
+        guard config != appliedConfig else { return }
+        let previous = appliedConfig
+        appliedConfig = config
+
+        let classifier = Classifier(
+            org: config.effectiveOrgPatterns,
+            noise: config.effectiveSystemNoise,
+            allowlist: config.allowlist,
+            remote: config.effectiveRemoteControl
+        )
+        classifierLock.withLock { self.classifier = classifier }
+        pipeline.setClassifier(classifier)
+
+        if previous?.autoKillMaxPerHour != config.autoKillMaxPerHour {
+            autoKillEngine = AutoKillEngine(maxPerHour: config.autoKillMaxPerHour)
+        }
+        if previous?.orgBannerCooldownSeconds != config.orgBannerCooldownSeconds {
+            bannerPolicy = BannerPolicy(cooldown: TimeInterval(config.orgBannerCooldownSeconds))
+        }
+
+        // The alert category's action titles are localized (T21), and the
+        // method is re-callable for exactly this: a language change must reach
+        // the buttons on the next notification, not the next launch.
+        if previous?.language != config.language {
+            let language = Language(rawValue: config.language) ?? Strings.defaultLanguage
+            let notifications = self.notifications
+            Task { @MainActor in
+                notifications.registerAlertCategory(language: language)
+            }
+        }
+
+        evidenceLog.appendRaw(kind: .configReloaded)
     }
 
     // MARK: - Calibration (T18, spec §6)
@@ -615,6 +776,16 @@ final class AppController: @unchecked Sendable {
     @MainActor
     func runHistory() {
         historyWindow.show()
+    }
+
+    // MARK: - Settings (T23, spec §6c)
+
+    /// Opens the Settings window (spec §6c `Settings…`). Main thread only: the
+    /// form is AppKit. The save path is the window's own
+    /// (`ConfigStore.update`), so nothing here has to be told about it.
+    @MainActor
+    func runSettings() {
+        settingsWindow.show()
     }
 
     // MARK: - Kill (T21, spec §6d)
@@ -950,7 +1121,7 @@ final class AppController: @unchecked Sendable {
         guard config.autoKillNames.contains(where: {
             $0.caseInsensitiveCompare(raw.actor) == .orderedSame
         }) else { return }
-        guard classifier.classify(raw).tier == .remote else { return }
+        guard classifierLock.withLock({ classifier }).classify(raw).tier == .remote else { return }
 
         switch autoKillEngine.evaluate(actor: raw.actor) {
         case .skip:
@@ -1043,5 +1214,36 @@ final class AppController: @unchecked Sendable {
     private func stopMicWatch() {
         micWatchTimer?.cancel()
         micWatchTimer = nil
+    }
+}
+
+// MARK: - ConfigChangeRelay
+
+/// Stands between `ConfigStore` and `AppController` for the one moment neither
+/// can reach the other: the store's `onChange` is fixed at construction, while
+/// the apply path needs the fully built controller.
+///
+/// The store's closure captures the relay; the controller installs its handler
+/// at the end of its own `init`. Until then the relay is inert, and a config
+/// change that somehow arrived before that would be dropped rather than touch
+/// a half-built object — which is exactly the ordering the app has: the store
+/// does not notify during `load()`.
+///
+/// Threading: `ConfigStore` may call back from its watch queue, so both ends
+/// are lock-protected.
+private final class ConfigChangeRelay: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var handler: ((NoPeekConfig) -> Void)?
+
+    /// Installs the handler (last call wins; the app calls it once).
+    func install(_ handler: @escaping (NoPeekConfig) -> Void) {
+        lock.withLock { self.handler = handler }
+    }
+
+    /// Forwards one change, if anyone is listening yet.
+    func forward(_ config: NoPeekConfig) {
+        let handler = lock.withLock { self.handler }
+        handler?(config)
     }
 }

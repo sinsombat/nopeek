@@ -229,6 +229,13 @@ public struct NoPeekConfig: Codable, Equatable, Sendable {
 /// as a file change — `config` always reports what is on disk, never a value
 /// that failed to persist.
 ///
+/// `update(_:)` is **atomic under concurrent callers** (ruling R22): the whole
+/// read → mutate → write → reload runs on the store's watch queue, so two
+/// callers can never each mutate the same base config and drop one another's
+/// change. The mutation closure therefore runs on that queue too — the app's
+/// observers are already documented as idempotent, so a caller that saves
+/// while another saves (or while the watcher fires) is safe by construction.
+///
 /// **Watching.** `startWatching()` attaches a `DispatchSource` to the file
 /// itself (`O_EVTONLY`, no read permission needed) and fires `onChange` on the
 /// store's private serial queue after a short debounce — writers emit several
@@ -335,13 +342,25 @@ public final class ConfigStore: @unchecked Sendable {
     /// change (so `config` and observers only ever see what is on disk) and
     /// notifies `onChange`.
     ///
+    /// **Serialized (ruling R22).** The read, the mutation, the write and the
+    /// reload all run inside one block on the store's watch queue, so
+    /// concurrent callers cannot interleave their read-modify-writes: each
+    /// update sees every update before it. `onChange` is therefore delivered
+    /// on the watch queue (as watcher events already were) and a failure
+    /// leaves the in-memory config untouched, exactly as before. A caller that
+    /// is already on the queue — e.g. an observer reacting to a previous
+    /// update — re-enters inline instead of deadlocking, like
+    /// `startWatching`/`stopWatching`.
+    ///
     /// Throws when the file cannot be written; the in-memory config is left
     /// untouched in that case.
     public func update(_ mutate: (inout NoPeekConfig) -> Void) throws {
-        var draft = config
-        mutate(&draft)
-        try write(Self.encode(draft))
-        reload(notify: true)
+        try syncOnWatchQueue {
+            var draft = config
+            mutate(&draft)
+            try write(Self.encode(draft))
+            reload(notify: true)
+        }
     }
 
     // MARK: - Watching
@@ -371,12 +390,17 @@ public final class ConfigStore: @unchecked Sendable {
     }
 
     /// Runs `body` on the watch queue, reentrantly when already there.
-    private func syncOnWatchQueue(_ body: () -> Void) {
+    ///
+    /// The store's serialization point: `startWatching`/`stopWatching` and —
+    /// since ruling R22 — `update(_:)` run their whole bodies here, so they can
+    /// never interleave with each other or with a watcher event. `body`'s
+    /// result and any error it throws travel back to the caller.
+    @discardableResult
+    private func syncOnWatchQueue<T>(_ body: () throws -> T) rethrows -> T {
         if DispatchQueue.getSpecific(key: Self.watchQueueKey) != nil {
-            body()
-        } else {
-            watchQueue.sync(execute: body)
+            return try body()
         }
+        return try watchQueue.sync(execute: body)
     }
 
     /// Opens the file and starts a fresh source. A dead file (open fails) is

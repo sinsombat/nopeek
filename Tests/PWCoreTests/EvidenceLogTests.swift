@@ -263,6 +263,66 @@ import PWCore
             .sorted())
     }
 
+    @Test func testPurgeWithExplicitKeepingDaysOverridesTheInitRetention() throws {
+        // T23's `Purge now`: the Settings window passes the *saved* retention,
+        // which can differ from the value this instance was built with (a live
+        // change does not rebuild the app's `EvidenceLog`; its `retentionDays`
+        // is only the default). The explicit value must win, with the same
+        // whole-local-day rule and the same clamp as the no-argument path.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+
+        let clock = TestClock(now: Self.day(0, hour: 23))
+        let log = EvidenceLog(directory: directory, retentionDays: 30, now: { clock.now })
+        for offset in [-10, -5, -2, 0] {
+            log.append(Self.classified(ts: Self.day(offset, hour: 10)))
+        }
+        #expect(try Self.names(in: directory).count == 4)
+
+        log.purgeOldFiles(keepingDays: 3)
+
+        // 3 days = today and the two before it, exactly like retentionDays = 3.
+        #expect(try Self.names(in: directory) == [-2, 0]
+            .map { Self.fileName(for: Self.day($0, hour: 10)) }
+            .sorted())
+    }
+
+    @Test func testPurgeKeepingDaysNilIsTheInitRetention() throws {
+        // The defaulted parameter is additive: `nil` (and every existing call
+        // site) keeps T8's semantics — the instance's own retention.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+
+        let clock = TestClock(now: Self.day(0, hour: 12))
+        let log = EvidenceLog(directory: directory, retentionDays: 2, now: { clock.now })
+        for offset in [-3, -1, 0] {
+            log.append(Self.classified(ts: Self.day(offset, hour: 10)))
+        }
+
+        log.purgeOldFiles(keepingDays: nil)
+
+        #expect(try Self.names(in: directory) == [-1, 0]
+            .map { Self.fileName(for: Self.day($0, hour: 10)) }
+            .sorted())
+    }
+
+    @Test func testPurgeKeepingDaysClampsAtOneDay() throws {
+        // A saved retention of 0 or less must never take out the file being
+        // appended to; the clamp is the same `max(1)` the init path applies.
+        let directory = Self.scratchDirectory()
+        defer { Self.cleanup(directory) }
+
+        let clock = TestClock(now: Self.day(0, hour: 12))
+        let log = EvidenceLog(directory: directory, retentionDays: 30, now: { clock.now })
+        for offset in [-2, 0] {
+            log.append(Self.classified(ts: Self.day(offset, hour: 10)))
+        }
+
+        log.purgeOldFiles(keepingDays: 0)
+
+        #expect(try Self.names(in: directory) == [Self.fileName(for: Self.day(0, hour: 10))])
+    }
+
     @Test func testPurgeFallsBackToMtimeForUnparsableName() throws {
         // A file whose name does not parse is aged by its modification date,
         // and anything outside the naming scheme (here: `.DS_Store`) is never

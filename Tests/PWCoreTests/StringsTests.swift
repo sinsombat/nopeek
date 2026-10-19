@@ -172,6 +172,29 @@ import PWCore
             "history.detail.pid", "history.detail.path", "history.detail.none",
             "history.button.trust", "history.button.kill",
             "history.button.export", "history.button.close",
+            // T23's Settings window: the menu row, the form's labels, the two
+            // level/language popups, the per-rule inline error keys, the purge
+            // pair and the buttons (`เปิดไฟล์ config` is its own key because
+            // the window spells it as a button, not as the menu's row).
+            "menu.settings",
+            "settings.title", "settings.intro",
+            "settings.section.general", "settings.section.lists",
+            "settings.section.autokill",
+            "settings.language", "settings.language.th", "settings.language.en",
+            "settings.sound", "settings.bannerOnForRemote", "settings.bannerLevel",
+            "settings.level.floating", "settings.level.screenSaver",
+            "settings.cooldown", "settings.gap", "settings.retention",
+            "settings.purge", "settings.purge.done",
+            "settings.list.orgPatterns", "settings.list.remoteControlExtra",
+            "settings.list.systemNoiseExtra", "settings.list.allowlist",
+            "settings.list.autoKillNames", "settings.list.hint",
+            "settings.autokill.enabled", "settings.autokill.maxPerHour",
+            "settings.save", "settings.saved", "settings.openConfig",
+            "settings.close",
+            "settings.error.language", "settings.error.bannerLevel",
+            "settings.error.cooldown", "settings.error.gap",
+            "settings.error.retention", "settings.error.maxPerHour",
+            "settings.error.number",
         ]
         for key in required {
             #expect(Strings.allKeys.contains(key), "missing key \(key)")
