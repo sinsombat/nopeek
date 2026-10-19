@@ -225,6 +225,218 @@ import PWCore
         ])
     }
 
+    // MARK: - Memoised verdicts (perf fix)
+
+    @Test func testVerdictCacheIsInvalidatedWhenANameChangesForTheSamePid() {
+        // The cache is keyed by pid and validated against the name: a recycled
+        // pid is a different process, and a name that now matches must fire
+        // even though the same pid was seen (and did not match) last tick.
+        let listing = Listing([proc(700, "Google Chrome")])
+        let watch = watch(names: { ["TeamViewer"] }, listing: listing)
+
+        #expect(watch.tick().isEmpty)
+
+        listing.procs = [proc(700, "TeamViewer")] // same pid, new process
+        #expect(watch.tick().map(\.actor) == ["TeamViewer"])
+    }
+
+    @Test func testVerdictCacheIsInvalidatedWhenAPathAppearsForTheSamePid() {
+        // Same trap on the other half of the key: the verdict for a name-only
+        // entry cannot answer for the same name once its path is readable.
+        let info = proc(800, "helper")
+        let listing = Listing([info])
+        let watch = watch(names: { ["AnyDesk"] }, listing: listing)
+
+        #expect(watch.tick().isEmpty)
+
+        listing.procs = [proc(800, "helper", "/Applications/AnyDesk.app/Contents/MacOS/helper")]
+        #expect(watch.tick().map(\.actor) == ["helper"])
+    }
+
+    @Test func testVerdictCacheIsDroppedWhenTheWatchlistChanges() {
+        // A verdict computed for one watchlist must never answer for another:
+        // narrowing the watchlist while a process stays put has to silence it,
+        // and widening it has to catch what was already running.
+        let listing = Listing([proc(900, "TeamViewer"), proc(901, "AnyDesk")])
+        var watched = ["TeamViewer"]
+        let watch = watch(names: { watched }, listing: listing)
+
+        #expect(watch.tick().map(\.actor) == ["TeamViewer"])
+        #expect(watch.tick().isEmpty)
+
+        watched = ["AnyDesk"]
+        #expect(watch.tick().map(\.actor) == ["AnyDesk"])
+
+        watched = []
+        #expect(watch.tick().isEmpty)
+
+        watched = ["TeamViewer"]
+        #expect(watch.tick().map(\.actor) == ["TeamViewer"])
+    }
+
+    // MARK: - Matching parity table
+
+    @Test func testMatchingParityTable() {
+        // The matching rule is shared with the Classifier (case-insensitive
+        // substring over name and path), and this table pins it as such: each
+        // row is one tick against a one-process table. The optimisation caches
+        // this function's verdicts, so every row here must keep behaving
+        // identically — including the rows that only match through the path and
+        // the rows that must not match at all.
+        let defaults = NoPeekConfig.defaultRemoteControl
+        let cases: [(name: String, path: String?, watchlist: [String], matches: Bool)] = [
+            // exact name (lowercase watchlist entry, kernel spelling verbatim)
+            ("screensharingd", nil, defaults, true),
+            // case variants, both directions
+            ("Screensharingd", nil, ["screensharingd"], true),
+            ("RustDesk", nil, ["rustdesk"], true),
+            ("rustdesk", nil, ["RustDesk"], true),
+            // substring hit on the name
+            ("screensharingd_helper", nil, ["screensharingd"], true),
+            ("TeamViewer_Service", nil, ["teamviewer"], true),
+            // path-only hit: the actor name itself matches nothing
+            (
+                "ARDAgent",
+                "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent",
+                ["RemoteManagement"],
+                true
+            ),
+            ("helper", "/Applications/AnyDesk.app/Contents/MacOS/helper", ["AnyDesk"], true),
+            // needle longer than the (16-char-truncated) name: no substring can fit
+            ("short", nil, ["much_longer_needle"], false),
+            // the empty entry is ignored, not matched
+            ("anything", nil, [""], false),
+            // no hit on either field
+            (
+                "Google Chrome He",
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                defaults,
+                false
+            ),
+            ("sleep", nil, defaults, false),
+            (
+                "mdworker_shared",
+                "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework",
+                defaults,
+                false
+            ),
+        ]
+
+        for testCase in cases {
+            let watch = watch(
+                names: { testCase.watchlist },
+                listing: Listing([proc(1, testCase.name, testCase.path)])
+            )
+            let events = watch.tick()
+            #expect(
+                events.count == (testCase.matches ? 1 : 0),
+                "\(testCase.name) [\(testCase.path ?? "no path")] vs \(testCase.watchlist) — expected \(testCase.matches ? "a match" : "no match")"
+            )
+        }
+    }
+
+    // MARK: - Budget
+
+    @Test func testMatchingStaysUnderBudgetForAFullProcessTable() {
+        // The idle-CPU acceptance (app + `log` child < 1 %) is dominated by
+        // this poll: ~600 processes × the 12-entry watchlist, every 3 s. The
+        // budget is 2 ms per *warm* tick — the steady state the acceptance
+        // measures, where the memoised verdicts answer for every process that
+        // has not changed. The cold first tick pays the full substring scan
+        // once and must still be bounded (generous bound: it is a one-off).
+        //
+        // The fixture is pre-built and handed back unchanged, so the measured
+        // window is matching + bookkeeping only; decoding the table from the
+        // kernel (`SystemProcesses.list`, ~1 ms) lives outside this test.
+        let (watch, watched, total) = Self.fullProcessTable()
+        let clock = ContinuousClock()
+
+        var firstEvents: [RawEvent] = []
+        let cold = clock.measure { firstEvents = watch.tick() }
+        #expect(firstEvents.count == watched, "the fixture's watched processes must all fire on the first tick")
+        #expect(cold < .seconds(1), "cold matching pass took \(cold)")
+
+        let iterations = 200
+        var totalWarm = Duration.zero
+        for _ in 0..<iterations {
+            let tick = clock.measure { _ = watch.tick() }
+            #expect(tick < .seconds(1))
+            totalWarm += tick
+        }
+        let warm = totalWarm / iterations
+
+        // Printed so the numbers land in the test log: `make test` shows them
+        // next to the assertion.
+        print("ProcessWatch budget: \(total) processes, \(watched) watched — cold \(cold), warm average \(warm)")
+
+        #expect(
+            warm < .milliseconds(2),
+            "warm matching of \(total) processes took \(warm) per tick (budget 2 ms)"
+        )
+    }
+
+    /// A synthetic table the size and shape of a real Mac's: ~600 processes
+    /// with kernel-length names (≤ 16 chars, mixed case), most with paths, a
+    /// few without, and every entry of the default watchlist present exactly
+    /// once plus one path-only match.
+    ///
+    /// Returns the watch, how many processes must fire on the first tick, and
+    /// the fixture size.
+    private static func fullProcessTable() -> (ProcessWatch, Int, Int) {
+        var procs: [ProcInfo] = []
+        var pid: Int32 = 1000
+        var watched = 0
+
+        for needle in NoPeekConfig.defaultRemoteControl {
+            // One live instance per watchlist entry (name spelled the way the
+            // kernel would: the entry's own casing).
+            procs.append(ProcInfo(pid: pid, name: needle, path: "/Applications/\(needle).app/Contents/MacOS/\(needle)"))
+            pid += 1
+            watched += 1
+        }
+        // One path-only match: the name is ordinary, only the path carries a
+        // watchlist entry.
+        procs.append(ProcInfo(
+            pid: pid,
+            name: "helper",
+            path: "/Applications/ScreenConnect.app/Contents/MacOS/helper"
+        ))
+        pid += 1
+        watched += 1
+
+        // The rest: typical macOS churn that matches nothing, in the kernel's
+        // 16-char-truncated shape, some without a path.
+        let patterns = [
+            "Google Chrome He", "mdworker_shared", "kernel_task", "WindowServer",
+            "launchd", "python3", "bash", "node", "swift-frontend", "coreaudiod",
+            "com.apple.WebKit", "diskarbitrationd", "notifyd", "cfprefsd",
+        ]
+        var index = 0
+        while procs.count < 600 {
+            let base = patterns[index % patterns.count]
+            let name = "\(base)_\(index)".count <= 16 ? "\(base)_\(index)" : base
+            if index % 7 == 0 {
+                procs.append(ProcInfo(pid: pid, name: name)) // name-only: path refused
+            } else {
+                procs.append(ProcInfo(
+                    pid: pid,
+                    name: name,
+                    path: "/System/Library/CoreServices/\(name)/Contents/MacOS/\(name)"
+                ))
+            }
+            pid += 1
+            index += 1
+        }
+
+        let listing = Listing(procs)
+        let watch = ProcessWatch(
+            names: { NoPeekConfig.defaultRemoteControl },
+            lister: { listing.procs },
+            now: { Self.fixedNow }
+        )
+        return (watch, watched, procs.count)
+    }
+
     // MARK: - Real process table (smoke)
 
     @Test func testSmokeListsSelf() {

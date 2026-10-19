@@ -153,6 +153,18 @@ public enum SystemProcesses {
 /// several same-named helpers exits (`remoting_host` spawns one per session),
 /// which is noise.
 ///
+/// **Cost.** One tick is `O(#processes × #watchlist)` *substring searches*, and
+/// a substring search is the expensive part: ~600 processes against the 12
+/// entry default watchlist is ~14k searches, tens of milliseconds, every 3 s.
+/// Matching is therefore **memoised per process**: the verdict is a pure
+/// function of `(name, path, watchlist)`, so a pid whose name, path and the
+/// watchlist are unchanged since the last tick reuses the previous verdict
+/// instead of searching again. Steady state costs one dictionary lookup and two
+/// string comparisons per process (~0.1 ms for a full table); the full scan is
+/// paid once at the first tick and once per new process / config change. The
+/// edge state above is untouched by this — it caches a computation, it does not
+/// change which processes match.
+///
 /// **Threading.** Like `Throttler`, this class keeps state across ticks and is
 /// deliberately not thread-safe: one owner drives it. In the app the owner is
 /// the reader's serial callback queue (see `LogStreamReader.performSerialized`),
@@ -175,6 +187,30 @@ public final class ProcessWatch {
     /// A name in here is "already reported"; leaving the set is what makes it
     /// reportable again.
     private var present: Set<String> = []
+
+    /// One memoised matching verdict: for this name/path it was `matched`.
+    ///
+    /// Pids are recycled by the kernel, so the entry is only trusted when the
+    /// name *and* path still equal what the verdict was computed from.
+    private struct Verdict {
+        let name: String
+        let path: String?
+        let matched: Bool
+    }
+
+    /// The verdict cache, keyed by pid (see the class documentation on cost).
+    private var verdicts: [Int32: Verdict] = [:]
+
+    /// The lowered watchlist the cached verdicts belong to. A config reload
+    /// (T17) changes it, and the whole cache is dropped when it differs —
+    /// comparing 12 short strings once per tick is far cheaper than re-scanning
+    /// the table, and it keeps a stale watchlist from answering for a new one.
+    private var verdictWatchlist: [String] = []
+
+    /// Upper bound on the cache, so weeks of pid churn cannot grow it without
+    /// limit. Far above any real process table; hitting it just costs one
+    /// full re-scan.
+    private static let verdictCacheLimit = 4096
 
     public init(
         names: @escaping () -> [String],
@@ -200,13 +236,31 @@ public final class ProcessWatch {
             // re-fires — rather than staying silent because of a match made
             // against a watchlist the user has since replaced.
             present.removeAll()
+            verdicts.removeAll()
+            verdictWatchlist = watchlist
             return []
+        }
+
+        // Matching is pure in (name, path, watchlist): verdicts from the
+        // previous tick still hold while the watchlist is the same. This is
+        // what keeps a 3 s poll of a full process table cheap — see the class
+        // documentation on cost.
+        if watchlist != verdictWatchlist || verdicts.count > Self.verdictCacheLimit {
+            verdicts.removeAll()
+            verdictWatchlist = watchlist
         }
 
         var matched: Set<String> = []
         var appeared: [ProcInfo] = []
         for proc in lister() {
-            guard Self.matches(proc, watchlist: watchlist) else { continue }
+            let isMatch: Bool
+            if let cached = verdicts[proc.pid], cached.name == proc.name, cached.path == proc.path {
+                isMatch = cached.matched
+            } else {
+                isMatch = Self.matches(proc, watchlist: watchlist)
+                verdicts[proc.pid] = Verdict(name: proc.name, path: proc.path, matched: isMatch)
+            }
+            guard isMatch else { continue }
             // The first instance of a name wins; later instances of the same
             // name are the same presence (see the class documentation).
             guard matched.insert(proc.name).inserted else { continue }
