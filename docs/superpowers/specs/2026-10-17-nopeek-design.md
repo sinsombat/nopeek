@@ -312,7 +312,9 @@ nopeek/
 - **Detect + notify เท่านั้น — บล็อก/หยุดไม่ได้**
 - ครอบคลุมทุกอย่างที่ผ่าน userland ของ macOS: ScreenCaptureKit/TCC, daemon remote-control, กล้อง, ไมค์
 - **จับไม่ได้:** kext/kernel-level surveillance, การดูจากฝั่ง server ที่ไม่แตะเครื่อง, อุปกรณ์ภายนอก, และ gap ที่เกิดก่อนแอปถูกติดตั้ง
-- กล้อง/ไมค์แบบ poll บอกได้แค่ "ถูกใช้" — ชื่อผู้ใช้เป็น best-effort
+- กล้องเป็น log-based ระบุแอปได้; ไมค์ก็เป็น log-based (v1.1) ระบุแอปจาก client PID ของ `coreaudiod` — path อาจไม่มีสำหรับ client ที่เป็น root และไม่มี poll ไมค์แล้ว
+- **ไมค์ – เห็นเฉพาะการเปลี่ยนสถานะใหม่:** log stream เห็นแค่ `running: yes` ที่เกิดหลัง NoPeek เริ่มทำงาน การอัดที่เริ่มค้างอยู่ก่อนแล้วจะไม่ถูกจับ (poll CoreAudio เดิมใน v1.0 จับเคสนี้ได้)
+- **ไมค์ – ไม่ระบุอุปกรณ์:** ฟิลด์ `device` ในบรรทัดของ `coreaudiod` เป็น `<private>` จึงบอกได้แค่ว่าแอปไหนบันทึก ไม่ได้บอกว่าเป็นไมค์ตัวใด
 - System Checkup ให้ deep link แทนการอ่านรายชื่อ app ที่มีสิทธิ์ Screen Recording (ต้อง Full Disk Access — NoPeek ไม่ขอ)
 - **Kill/Auto-kill เป็นเครื่องมือตอบสนองที่ผู้ใช้สั่งเอง** — auto-kill เฉพาะ process ฝั่ง user; root process ทำได้เฉพาะ manual + admin prompt เฉพาะครั้ง; process อาจถูก launchd/ระบบ respawn กลับ (loop guard หยุดให้เมื่อเกินโควตา/ชม.)
 - การฆ่า agent ขององค์กรอาจขัด policy ของบริษัท — NoPeek ยืนยันทุกครั้งก่อนฆ่า (manual) และไม่ฆ่าแบบอัตโนมัติเว้นแต่ผู้ใช้เปิด `autoKillEnabled` เอง

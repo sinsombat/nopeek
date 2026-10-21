@@ -41,8 +41,8 @@ import PWCore
 
     // MARK: - Helpers
 
-    /// Parser under test: the shipped default rules (screen + camera), exactly
-    /// what `AppController` builds. Passing no rules is deliberate — a
+    /// Parser under test: the shipped default rules (screen + camera + mic),
+    /// exactly what `AppController` builds. Passing no rules is deliberate — a
     /// regression that un-wires `KindRule.defaults` must fail here.
     private static let parser = LogLineParser()
 

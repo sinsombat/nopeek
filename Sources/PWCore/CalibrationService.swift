@@ -85,10 +85,14 @@ extension StepResult: Codable {
 ///     { "result" : { "actor" : "screencaptureui", "status" : "passed" },
 ///       "step" : "screen" },
 ///     { "result" : { "status" : "timed-out" }, "step" : "camera" },
-///     { "result" : { "actor" : "mic", "status" : "passed" }, "step" : "mic" }
+///     { "result" : { "actor" : "VoiceMemos", "status" : "passed" }, "step" : "mic" }
 ///   ]
 /// }
 /// ```
+///
+/// The mic actor is normally the recording app (resolved from the
+/// `coreaudiod` client pid), falling back to `"mic"` when that client can no
+/// longer be resolved.
 ///
 /// The array (rather than a dictionary keyed by step) keeps the file in the
 /// wizard's own step order and makes a partial run's missing steps visibly

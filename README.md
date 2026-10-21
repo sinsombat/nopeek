@@ -192,6 +192,8 @@ More caveats, so nobody is surprised later:
 - On this macOS family the purple screen-capture indicator can come from system tools, not just humans; that traffic is `SYSTEM_NOISE` by default (configurable, see above).
 - **Camera** detection is log-based (from the capturing app's session start/stop lines) — attribution is direct, but an app killed with `pkill`/`SIGTERM` may never log its `stopRunning`, so you may not get the "off" line. Camera/off events are log-only anyway.
 - **Mic** attribution comes from the client PID `coreaudiod` names in its `PublishRecordingClientInfo` line, resolved to the app at parse time. If the recorder has already exited (the stop line often arrives after the app is gone), the event falls back to `mic` rather than a wrong name; a very short recording that never logged a start may likewise be invisible.
+- **Mic transitions are edge events** — NoPeek only sees a recording that *starts* while it is running. A recording already in progress when NoPeek launches (or one that started while the monitor was down) is not noticed; the removed v1.0 CoreAudio poll did catch that case.
+- **Which microphone is `<private>`** — `coreaudiod` redacts the `device` field, so NoPeek names the recording app, not the input device.
 - **Checkup** uses deep links instead of reading the Screen-Recording permission list (that would need Full Disk Access).
 - **Kill/auto-kill** are user-directed; auto-kill is user-processes-only, never elevates, and a respawned process will keep coming back until the loop guard stops the fight.
 - Killing an org/IT agent may violate corporate policy — every manual kill asks first for this reason.
@@ -421,7 +423,9 @@ make uninstall                 # หยุด + ลบแอปและ LaunchA
 
 - บน macOS ชุดนี้ จุดม่วงแคปจออาจมาจากเครื่องมือของระบบ ไม่ใช่คน — traffic นั้นเป็น `SYSTEM_NOISE` โดยค่าเริ่มต้น (ปรับได้ตามหัวข้อด้านบน)
 - **กล้อง** ตรวจจับจาก log (บรรทัด start/stop ของแอปที่แคป) attribution ตรง แต่แอปที่ถูก `pkill`/`SIGTERM` อาจไม่ทัน log `stopRunning` จึงอาจไม่มีบรรทัด "ปิด"; event ปิดกล้องเป็น log-only อยู่แล้ว
-- **ไมค์** บอกได้แค่ว่า "ถูกใช้" ไม่รู้ว่าใครใช้
+- **ไมค์** attribution มาจาก client PID ที่ `coreaudiod` ระบุในบรรทัด `PublishRecordingClientInfo` แล้ว resolve เป็นแอปตอน parse ถ้าแอปผู้บันทึกปิดไปแล้ว (บรรทัด stop มักมาหลังแอปหาย) event จะ fallback เป็น `mic` แทนชื่อที่ผิด; การอัดสั้นมากที่ไม่ทัน log ตอนเริ่มก็อาจมองไม่เห็นเช่นกัน
+- **ไมค์จับเฉพาะการเปลี่ยนสถานะใหม่** — NoPeek เห็นแค่การอัดที่ *เริ่ม* ขณะที่มันทำงานอยู่ การอัดที่เริ่มค้างอยู่ก่อนเปิดแอป (หรือเริ่มตอน monitor ล่ม) จะไม่ถูกจับ — poll CoreAudio เดิมใน v1.0 จับเคสนี้ได้
+- **ไม่รู้ว่าใช้ไมค์ตัวไหน** — ฟิลด์ `device` ในบรรทัดของ `coreaudiod` ถูกปิดเป็น `<private>` NoPeek จึงบอกได้แค่ว่าแอปไหนบันทึก ไม่ได้บอกว่าเป็น input device ตัวใด
 - **Checkup** ใช้ deep link แทนการอ่านรายชื่อสิทธิ์ Screen Recording (ต้อง Full Disk Access)
 - **Kill/auto-kill** เป็นการตอบสนองที่ผู้ใช้สั่ง; auto-kill เฉพาะ process ฝั่ง user ไม่ยกสิทธิ์ และ process ที่ถูก respawn จะกลับมาจนกว่า loop guard จะหยุดให้
 - การฆ่า agent ขององค์กรอาจขัดนโยบายบริษัท — ทุก manual kill จึงถามก่อนด้วยเหตุนี้
