@@ -15,10 +15,11 @@ import PWCore
 /// red banner's per-actor cooldown and its non-activating panels) →
 /// `LogStreamReader` (default ndjson command
 /// + default predicate) → `ProcessWatch` (T13: the remote-tier process table
-/// watch, whose watchlist closure reads `config` live) → `MicWatch` (T15: the
-/// 2 s microphone poll). Camera detection needs no component of its own: the
-/// T14 field-test fix moved it onto the log stream (the parser's
-/// `KindRule.cameraDefaults` + the predicate's camera clauses).
+/// watch, whose watchlist closure reads `config` live). Camera and microphone
+/// detection need no component of their own: the T14 field-test fix moved the
+/// camera onto the log stream (the parser's `KindRule.cameraDefaults` + the
+/// predicate's camera clauses), and v1.1 moved the microphone there too
+/// (`KindRule.micDefaults` + the `coreaudiod` recorder-client clause).
 ///
 /// **Live config (T23).** The `Classifier` is no longer a launch-time
 /// snapshot: the store's change notification — a Settings save, `Reload
@@ -39,17 +40,17 @@ import PWCore
 /// monitor-health: not a pipeline event, so `Pause` cannot mute it) and kept in
 /// `latestGap` for the menu's gap row. Then the reader, then the process watch
 /// (T13: a 3 s `DispatchSourceTimer` whose polls run on the reader's serial
-/// queue, so `tick()` and `pipeline.handle(_:)` serialize with log lines) and
-/// the mic watch (T15: the same shape at 2 s), then the T24 heartbeat (5 min,
-/// the same hop to the reader's queue, which keeps `lastActivity()` fresh while
-/// nothing is captured), and finally the T18 calibration wizard — which opens
-/// by itself on a launch that finds no persisted summary.
+/// queue, so `tick()` and `pipeline.handle(_:)` serialize with log lines), then
+/// the T24 heartbeat (5 min, the same hop to the reader's queue, which keeps
+/// `lastActivity()` fresh while nothing is captured), and finally the T18
+/// calibration wizard — which opens by itself on a launch that finds no
+/// persisted summary.
 ///
 /// **Threading.** The reader delivers lines and state transitions on its one
 /// serial callback queue; `Pipeline` (and the `Throttler` inside it) require
-/// exactly that. The process watch (T13) and the mic watch (T15) deliver their
-/// polls on the same queue (`LogStreamReader.performSerialized`), so the
-/// pipeline has one owner. The sink therefore also runs on that queue:
+/// exactly that. The process watch (T13) delivers its polls on the same queue
+/// (`LogStreamReader.performSerialized`), so the pipeline has one owner. The
+/// sink therefore also runs on that queue:
 /// `EvidenceLog` is driven by one owner, `BannerPolicy.shouldShow` keeps its
 /// per-actor cooldown ordered there too, and the only state the main thread
 /// shares with it — the tray and the reader state — sits behind `uiLock`.
@@ -225,14 +226,10 @@ final class AppController: @unchecked Sendable {
     /// process table against the config's remote-control watchlist.
     private let processWatch: ProcessWatch
 
-    // The camera needs no component here (T14 field-test fix, spec §4-D): its
-    // signal arrives over the log stream like any other — see the class
-    // documentation and `KindRule.cameraDefaults`.
-
-    /// The mic watch (T15, spec §4-E): one 2 s poll of the audio devices that
-    /// have input streams and are running. Reads device properties only — no
-    /// IO, no TCC request API (spec §3).
-    private let micWatch: MicWatch
+    // The camera and microphone need no component here (T14 field-test fix,
+    // spec §4-D; v1.1 mic rework, spec §4-E): both signals arrive over the log
+    // stream like any other — see the class documentation,
+    // `KindRule.cameraDefaults` and `KindRule.micDefaults`.
 
     /// The red banner's per-actor cooldown (T16, spec §5). Rebuilt by
     /// `applyConfig(_:)` when `orgBannerCooldownSeconds` changes — a rebuild
@@ -252,15 +249,10 @@ final class AppController: @unchecked Sendable {
     /// Armed by `start()`, cancelled by `stop()`.
     private var processWatchTimer: DispatchSourceTimer?
 
-    /// Fires the mic-watch polls (T15); same division of labour as the
-    /// process-watch queue above.
-    private let micWatchQueue = DispatchQueue(label: "com.sinsombat.nopeek.micwatch")
-    private var micWatchTimer: DispatchSourceTimer?
-
     /// Fires the heartbeat writes (T24, spec §8: one every 5 minutes). Its own
-    /// queue for the same reason as the two above: the timer must not run on
-    /// the main thread, and the append itself is handed to the reader's serial
-    /// queue.
+    /// queue for the same reason as the process watch above: the timer must not
+    /// run on the main thread, and the append itself is handed to the reader's
+    /// serial queue.
     private let heartbeatQueue = DispatchQueue(label: "com.sinsombat.nopeek.heartbeat")
     private var heartbeatTimer: DispatchSourceTimer?
 
@@ -329,10 +321,8 @@ final class AppController: @unchecked Sendable {
             names: { configStore.config.effectiveRemoteControl }
         )
 
-        // The camera is log-driven (no watch object to build); the mic watch
-        // (T15) reads whether an input device is running and reports the
-        // on/off edges.
-        self.micWatch = MicWatch()
+        // The camera and microphone are log-driven (no watch object to build);
+        // their signals arrive over the default reader/parser.
 
         // The banner gate (T16, spec §5): `Pipeline` emits `.banner` for every
         // eligible event; this policy decides whether one shows, per actor.
@@ -554,7 +544,6 @@ final class AppController: @unchecked Sendable {
         configStore.startWatching()
         reader.start()
         startProcessWatch()
-        startMicWatch()
         startHeartbeat()
 
         // Spec §4 monitor-gap: the silence that ended with this launch. It is
@@ -582,7 +571,6 @@ final class AppController: @unchecked Sendable {
     /// started.
     func stop() {
         stopProcessWatch()
-        stopMicWatch()
         stopHeartbeat()
         configStore.stopWatching()
         reader.stop()
@@ -1223,51 +1211,6 @@ final class AppController: @unchecked Sendable {
         processWatchTimer = nil
     }
 
-    // MARK: - Mic watch (T15)
-
-    /// Arms the mic-watch timer (spec §3/§4-E). Idempotent.
-    ///
-    /// Same structure as the process and camera watches: the timer fires on its
-    /// own queue and hands each poll to the reader's serial queue, so
-    /// `MicWatch.tick()` and `Pipeline.handle(_:)` serialize with log lines and
-    /// with the other two watches' polls. The cadence comes from the watch
-    /// itself (`micWatch.interval`, pinned at 2 s) rather than a second
-    /// constant here, so the poller and its timer cannot drift apart.
-    ///
-    /// The first poll is immediate: a microphone already in use when NoPeek
-    /// starts is worth knowing about — that is exactly the state a user checks
-    /// for — and it is reported like any later one.
-    private func startMicWatch() {
-        guard micWatchTimer == nil else { return }
-
-        let reader = self.reader
-        let timer = DispatchSource.makeTimerSource(queue: micWatchQueue)
-        timer.schedule(deadline: .now(), repeating: micWatch.interval)
-        timer.setEventHandler { [weak self] in
-            reader.performSerialized { [weak self] in
-                guard let self else { return }
-                // `tick()` reads the system mic state and returns an event only
-                // on an edge: `micOn` the first time an input device is seen
-                // running, `micOff` once it has been down for longer than the
-                // 5 s debounce. From here on the event is routed exactly like a
-                // log-stream one (classify → log → notify / banner / tray);
-                // with actor "mic" it classifies NORMAL by default, which is
-                // the tier the user can mute. (It is also the calibration
-                // wizard's mic proof, which is why it goes through `route`.)
-                guard let raw = self.micWatch.tick() else { return }
-                self.route(raw)
-            }
-        }
-        micWatchTimer = timer
-        timer.resume()
-    }
-
-    /// Cancels the mic polls; the same one-tick grace as `stopProcessWatch`.
-    private func stopMicWatch() {
-        micWatchTimer?.cancel()
-        micWatchTimer = nil
-    }
-
     // MARK: - Heartbeat (T24, spec §8)
 
     /// Heartbeat cadence: spec §8 writes a `heartbeat` line every 5 minutes so
@@ -1277,7 +1220,7 @@ final class AppController: @unchecked Sendable {
 
     /// Arms the heartbeat timer (spec §8). Idempotent.
     ///
-    /// Same shape as the two watchers above, for the same reason: the timer
+    /// Same shape as the process watcher above, for the same reason: the timer
     /// fires on its own queue and the append is handed to the reader's serial
     /// queue, the `EvidenceLog`'s single owner (T8's contract), so a heartbeat
     /// serializes with log lines and polls instead of racing them. Measured on
@@ -1306,7 +1249,7 @@ final class AppController: @unchecked Sendable {
         timer.resume()
     }
 
-    /// Cancels the heartbeat; the same one-tick grace as the two watchers
+    /// Cancels the heartbeat; the same one-tick grace as the process watcher
     /// above (a fire already delivered to the reader's queue may still append
     /// once — a true observation of a dying session).
     private func stopHeartbeat() {

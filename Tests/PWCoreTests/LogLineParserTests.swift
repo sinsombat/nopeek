@@ -55,6 +55,11 @@ import PWCore
         try fixtureLines(named: "probe-camera-2026-10-18")
     }
 
+    /// The microphone probe's curated subset (Voice Memos recording, 2026-10-21).
+    private static func fixtureMicLines() throws -> [String] {
+        try fixtureLines(named: "probe-mic-2026-10-21")
+    }
+
     private static func fixtureLines(named name: String) throws -> [String] {
         let url = try #require(
             Bundle.module.url(
@@ -72,6 +77,13 @@ import PWCore
         try #require(
             fixtureLines().first { line in needles.allSatisfy { line.contains($0) } },
             "no fixture line contains all of \(needles)"
+        )
+    }
+
+    private static func fixtureMicLine(containing needles: [String]) throws -> String {
+        try #require(
+            fixtureMicLines().first { line in needles.allSatisfy { line.contains($0) } },
+            "no mic fixture line contains all of \(needles)"
         )
     }
 
@@ -284,16 +296,21 @@ import PWCore
 
     // MARK: - Camera sessions (field-test fix, spec §4-D rework)
 
-    @Test func testShippedDefaultsWireBothSignalFamilies() {
-        // The camera rules are only useful if the shipped parser actually
-        // carries them: `AppController` constructs `LogLineParser()` with no
-        // rules, and a regression to `screenCaptureDefaults` alone would
-        // silently disable camera detection while every other test stayed
+    @Test func testShippedDefaultsWireAllSignalFamilies() {
+        // The camera and mic rules are only useful if the shipped parser
+        // actually carries them: `AppController` constructs `LogLineParser()`
+        // with no rules, and a regression to `screenCaptureDefaults` alone
+        // would silently disable both detectors while every other test stayed
         // green.
         #expect(LogLineParser().rules == KindRule.defaults)
-        #expect(KindRule.defaults == KindRule.screenCaptureDefaults + KindRule.cameraDefaults)
+        #expect(
+            KindRule.defaults
+                == KindRule.screenCaptureDefaults + KindRule.cameraDefaults + KindRule.micDefaults
+        )
         #expect(KindRule.defaults.contains { $0.kind == .cameraOn })
         #expect(KindRule.defaults.contains { $0.kind == .cameraOff })
+        #expect(KindRule.defaults.contains { $0.kind == .micOn })
+        #expect(KindRule.defaults.contains { $0.kind == .micOff })
     }
 
     @Test func testCameraStartRunningParsesToCameraOn() throws {
@@ -365,6 +382,86 @@ import PWCore
                 "camera fixture is missing the \(needle) negative"
             )
             #expect(Self.parser.parse(line: line) == nil, "camera chatter parsed: \(needle)")
+        }
+    }
+
+    // MARK: - Microphone sessions (v1.1 log attribution)
+
+    /// The parser with a pinned client resolver: the probe's recorder client
+    /// (15522, Voice Memos) resolves without touching the live process table.
+    private static let micParser = LogLineParser(resolveClient: { pid in
+        pid == 15522
+            ? (name: "VoiceMemos", path: "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos")
+            : nil
+    })
+
+    @Test func testMicStartParsesToMicOnWithClientName() throws {
+        // coreaudiod publishes the recorder-client transition; the actor must
+        // be the *client* app, not coreaudiod, so org/allowlist patterns see
+        // the app the user is actually recording with.
+        let line = try Self.fixtureMicLine(containing: ["PublishRecordingClientInfo", "running: yes"])
+        let event = try #require(Self.micParser.parse(line: line))
+
+        #expect(event.kind == .micOn)
+        #expect(event.source == .logstream)
+        #expect(event.actor == "VoiceMemos")
+        #expect(event.actorPath == "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos")
+        // The pid is the client's, not coreaudiod's (786 in the probe): the
+        // full event is what Kill / Reveal resolve against.
+        #expect(event.pid == 15522)
+        #expect(event.rawSummary?.contains("Report client 15522 running: yes") == true)
+        #expect((event.rawSummary ?? "").count <= LogLineParser.rawSummaryLimit)
+    }
+
+    @Test func testMicStopParsesToMicOffWithClientName() throws {
+        let line = try Self.fixtureMicLine(containing: ["PublishRecordingClientInfo", "running: no"])
+        let event = try #require(Self.micParser.parse(line: line))
+
+        #expect(event.kind == .micOff)
+        #expect(event.source == .logstream)
+        #expect(event.actor == "VoiceMemos")
+        #expect(event.actorPath == "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos")
+        #expect(event.pid == 15522)
+        #expect(event.rawSummary?.contains("Report client 15522 running: no") == true)
+    }
+
+    @Test func testMicUnresolvableClientFallsBackToMic() throws {
+        // The app can be gone by the time the log line is parsed (the stop
+        // line routinely arrives after the recorder exits). The actor must
+        // then degrade to the signal itself — never to coreaudiod, which is
+        // only the messenger, and never to the recorder's stale pid.
+        let parser = LogLineParser(resolveClient: { _ in nil })
+        let line = try Self.fixtureMicLine(containing: ["PublishRecordingClientInfo", "running: yes"])
+        let event = try #require(parser.parse(line: line))
+
+        #expect(event.kind == .micOn)
+        #expect(event.actor == "mic")
+        #expect(event.actor != "coreaudiod")
+        #expect(event.actorPath == nil)
+        #expect(event.pid == nil)
+        #expect(event.rawSummary?.contains("Report client 15522 running: yes") == true)
+    }
+
+    @Test func testMicSpeakerVolumeChatterStaysNil() throws {
+        // Precision: the HAL logs plenty of coreaudiod chatter around the
+        // recorder transition. Speaker playback, IO-engine starts and power
+        // assertions all name coreaudiod (and sometimes a client pid) without
+        // being a microphone client report, so none of them may parse.
+        let all = try Self.fixtureMicLines()
+        #expect(all.count == 7, "the mic fixture drifted")
+
+        for needle in [
+            "HALS_Device::_GetCombinedVolumeScalar",
+            "HALS_IOEngine2::StartIO: starting IO on device <private>",
+            "Updated recording status successfully",
+            "Speaker: Thread context",
+            "HALB_PowerAssertion::Take",
+        ] {
+            let line = try #require(
+                all.first { $0.contains(needle) },
+                "mic fixture is missing the \(needle) negative"
+            )
+            #expect(Self.parser.parse(line: line) == nil, "mic chatter parsed: \(needle)")
         }
     }
 

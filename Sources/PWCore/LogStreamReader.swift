@@ -54,8 +54,13 @@ public final class LogStreamReader: @unchecked Sendable {
     /// `stopRunning` log lines under `com.apple.cameracapture`, emitted by the
     /// capturing app's own process (see `KindRule.cameraDefaults`), while the
     /// `AVCaptureDevice` in-use property the plan sketched never flipped.
+    ///
+    /// The microphone clause is the v1.1 replacement for the CoreAudio poll:
+    /// `coreaudiod`'s `PublishRecordingClientInfo` lines name the recorder
+    /// client's pid, which the parser resolves to the app (see
+    /// `KindRule.micDefaults`).
     public static let defaultPredicate =
-        #"subsystem == "com.apple.ScreenCaptureKit" OR process == "replayd" OR process == "ScreenCaptureApprovalUI" OR process == "screencapture" OR process == "screencaptureui" OR process == "screensharingd" OR (process == "tccd" AND composedMessage CONTAINS "ScreenCapture") OR process == "WindowManager" OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "startRunning") OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "stopRunning")"#
+        #"subsystem == "com.apple.ScreenCaptureKit" OR process == "replayd" OR process == "ScreenCaptureApprovalUI" OR process == "screencapture" OR process == "screencaptureui" OR process == "screensharingd" OR (process == "tccd" AND composedMessage CONTAINS "ScreenCapture") OR process == "WindowManager" OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "startRunning") OR (subsystem == "com.apple.cameracapture" AND eventMessage CONTAINS "stopRunning") OR (process == "coreaudiod" AND eventMessage CONTAINS "PublishRecordingClientInfo")"#
 
     /// The child the reader spawns by default: an ndjson log stream limited to
     /// the capture / remote-control / Mission-Control signals (spec §4).

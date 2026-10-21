@@ -40,17 +40,31 @@ public struct KindRule: Equatable, Sendable {
     public let messageContains: [String]?
     /// Kind assigned when the rule matches.
     public let kind: EventKind
+    /// Optional regex (one capture group) that pulls the *client* pid out of
+    /// the message when the line's own process is only a broker.
+    ///
+    /// The v1.1 microphone signal is the motivating case: `coreaudiod` logs
+    /// `… PublishRecordingClientInfo: Report client 15522 running: yes …`, so
+    /// the process in the line is the daemon and the real actor is the client
+    /// it names. The pattern also gates the rule: a line that lacks it is not
+    /// a match. When it does match and the pid resolves, the parser replaces
+    /// the rule's actor/path/pid with the client's (`LogLineParser`'s injected
+    /// `resolveClient`); when it matches but the client cannot be resolved,
+    /// the actor degrades to `"mic"` instead of naming the broker.
+    public let clientPIDPattern: String?
 
     public init(
         process: String? = nil,
         subsystem: String? = nil,
         messageContains: [String]? = nil,
-        kind: EventKind
+        kind: EventKind,
+        clientPIDPattern: String? = nil
     ) {
         self.process = process
         self.subsystem = subsystem
         self.messageContains = messageContains
         self.kind = kind
+        self.clientPIDPattern = clientPIDPattern
     }
 
     /// A rule needs a process or subsystem anchor to be a signal.
@@ -62,8 +76,28 @@ public struct KindRule: Equatable, Sendable {
         guard isAnchored else { return false }
         if let process, process != processName { return false }
         if let subsystem, subsystem != candidateSubsystem { return false }
-        guard let messageContains, !messageContains.isEmpty else { return true }
-        return messageContains.contains { message.contains($0) }
+        if let messageContains, !messageContains.isEmpty,
+           !messageContains.contains(where: { message.contains($0) }) {
+            return false
+        }
+        // A client-pid rule is defined by its report line: the pattern is not
+        // just an attribution extra, it is what separates `running: yes` from
+        // `running: no` when the needles above are shared. `… Updated recording
+        // status successfully.` carries the function name but no client and
+        // must not match.
+        if let clientPIDPattern, !Self.pattern(clientPIDPattern, matches: message) {
+            return false
+        }
+        return true
+    }
+
+    /// Whether `pattern` matches `message` (unused capture groups are fine).
+    private static func pattern(_ pattern: String, matches message: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        return regex.firstMatch(
+            in: message,
+            range: NSRange(message.startIndex..., in: message)
+        ) != nil
     }
 }
 
@@ -189,12 +223,57 @@ extension KindRule {
         ),
     ]
 
+    /// The microphone rules (spec §4-E, reworked by the v1.1 field probe).
+    ///
+    /// macOS exposes no app-level "who is recording" API, but the HAL's own
+    /// `coreaudiod` publishes every recorder client's transitions:
+    ///
+    ///     SystemStatusWrapper.mm:89  SystemStatusWrapper::PublishRecordingClientInfo:
+    ///         Report client 15522 running: yes device: <private>
+    ///     … running: no …
+    ///
+    /// PID 15522 was Voice Memos. The same mechanism fires for Teams, Zoom
+    /// and any other CoreAudio recorder, so the rule matches on the daemon and
+    /// then attributes the event to the client pid named in the message — see
+    /// `clientPIDPattern`. The surrounding `coreaudiod` chatter (speaker
+    /// volume, IO-engine starts, power assertions) carries no client report
+    /// and stays a non-candidate.
+    ///
+    /// `running: yes` / `running: no` are disjoint: one report line carries
+    /// exactly one state. Each rule's `clientPIDPattern` carries its state and
+    /// acts as the precise match (the needles above are shared pre-filters),
+    /// so the "Updated recording status successfully." sibling — same
+    /// function name, no client pid — stays a non-candidate. The on and off
+    /// patterns differ only in the trailing state, so they attribute
+    /// identically.
+    public static let micDefaults: [KindRule] = [
+        KindRule(
+            process: "coreaudiod",
+            messageContains: ["PublishRecordingClientInfo", "running: yes"],
+            kind: .micOn,
+            clientPIDPattern: KindRule.micStartClientPIDPattern
+        ),
+        KindRule(
+            process: "coreaudiod",
+            messageContains: ["PublishRecordingClientInfo", "running: no"],
+            kind: .micOff,
+            clientPIDPattern: KindRule.micStopClientPIDPattern
+        ),
+    ]
+
+    /// The client-pid capture group for the start transition:
+    /// `Report client 15522 running: yes`.
+    static let micStartClientPIDPattern = "Report client ([0-9]+) running: yes"
+    /// The client-pid capture group for the stop transition.
+    static let micStopClientPIDPattern = "Report client ([0-9]+) running: no"
+
     /// Every rule the parser ships with, in match order (first match wins).
     ///
-    /// Split into the two family lists so a caller can reason about one signal
+    /// Split into the signal-family lists so a caller can reason about one
     /// family at a time; `LogLineParser`'s default is this combined list, so
     /// the shipped parser and the shipped predicate cover the same signals.
-    public static let defaults: [KindRule] = screenCaptureDefaults + cameraDefaults
+    public static let defaults: [KindRule] =
+        screenCaptureDefaults + cameraDefaults + micDefaults
 }
 
 // MARK: - LogLineParser
@@ -223,8 +302,20 @@ public struct LogLineParser: Sendable {
     /// Value the evidence log's `rawSummary` is truncated to (spec §8).
     public static let rawSummaryLimit = 200
 
-    public init(rules: [KindRule] = KindRule.defaults) {
+    /// Resolver for a rule's `clientPIDPattern` capture: pid → display name
+    /// and executable path. Injected so tests never touch the live process
+    /// table; production is `LiveProcessNaming.resolve`. `nil` means the
+    /// client is gone (or unreadable), and the parser degrades the actor to
+    /// the signal itself.
+    private let resolveClient: @Sendable (Int32) -> (name: String, path: String?)?
+
+    public init(
+        rules: [KindRule] = KindRule.defaults,
+        resolveClient: @escaping @Sendable (Int32) -> (name: String, path: String?)? =
+            LiveProcessNaming.resolve
+    ) {
         self.rules = rules
+        self.resolveClient = resolveClient
     }
 
     /// Parses one ndjson line. `nil` means "not a candidate", never an error.
@@ -269,15 +360,66 @@ public struct LogLineParser: Sendable {
             return nil
         }
 
+        var actor = processName ?? "unknown"
+        var actorPath = path
+        var pid = (object["processID"] as? NSNumber)?.int32Value
+
+        if let clientPIDPattern = rule.clientPIDPattern {
+            // The line's process is a broker (`coreaudiod`); the actor is the
+            // client it names. An unresolvable client is not an error — the
+            // stop line routinely arrives after the recorder exited — so the
+            // event still lands, attributed to the signal itself. The broker
+            // pid must never leak into the event: Kill / Reveal resolve
+            // against `pid`, and signalling coreaudiod would be catastrophic.
+            if let clientPID = Self.clientPID(in: message, pattern: clientPIDPattern),
+               let client = resolveClient(clientPID) {
+                actor = client.name
+                actorPath = client.path
+                pid = clientPID
+            } else {
+                actor = Self.unattributedMicActor
+                actorPath = nil
+                pid = nil
+            }
+        }
+
         return RawEvent(
             ts: ts,
             source: .logstream,
             kind: rule.kind,
-            actor: processName ?? "unknown",
-            actorPath: path,
-            pid: (object["processID"] as? NSNumber)?.int32Value,
+            actor: actor,
+            actorPath: actorPath,
+            pid: pid,
             rawSummary: message.isEmpty ? nil : String(message.prefix(Self.rawSummaryLimit))
         )
+    }
+
+    /// Actor used when a `clientPIDPattern` rule matches but the client cannot
+    /// be named. Microphone usage is the only broker-attributed signal today,
+    /// so this is the literal `"mic"` — never the broker's name.
+    static let unattributedMicActor = "mic"
+
+    /// First capture group of `pattern` in `message`, as a pid.
+    ///
+    /// The patterns are tiny and the rules that carry one match only on rare
+    /// recorder transitions, so compiling per match is cheaper than keeping a
+    /// cache next to a value-typed `KindRule`. A malformed pattern or a
+    /// non-numeric capture answers `nil`, which the caller treats as
+    /// "unattributed".
+    private static func clientPID(in message: String, pattern: String) -> Int32? {
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(
+                in: message,
+                range: NSRange(message.startIndex..., in: message)
+            ),
+            match.numberOfRanges > 1,
+            let range = Range(match.range(at: 1), in: message),
+            let pid = Int32(message[range])
+        else {
+            return nil
+        }
+        return pid
     }
 
     /// Non-empty string value for `key`, if the JSON carried one.

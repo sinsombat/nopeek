@@ -39,7 +39,7 @@
   - `LogStreamReader` — spawn `/usr/bin/log stream --style ndjson` เป็น child process, อ่าน stdout ทีละบรรทัด, parse JSON, auto-restart แบบ exponential backoff (1s→2s→4s…สูงสุด 30s) เมื่อตาย
   - `ProcessWatch` — poll ทุก 3s: ไล่รายชื่อ process ทั้งระบบ (sysctl `KERN_PROC_ALL`) เทียบกับ watchlist
   - (camera — log-based, R21) กล้องถูกจับผ่าน log สัญญาณ `<<<< AVCaptureSession >>>> startRunning`/`stopRunning` (subsystem `com.apple.cameracapture`) — actor = แอปที่ใช้กล้อง (processImagePath basename); วิธี poll `isInUseByAnotherApplication` ถูกยกเลิก (ไม่แม่นกับ built-in camera บน macOS 27)
-  - `MicWatch` — poll ทุก 2s: input devices ทุกตัว เช็ค CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`; off-debounce 5s
+  - (microphone — log-based, v1.1) ไมค์ถูกจับผ่าน log ของ `coreaudiod`: `PublishRecordingClientInfo: Report client <pid> running: yes|no` — actor = แอปผู้บันทึก resolved จาก client PID (basename ของ `proc_pidpath`, fallback `p_comm`); วิธี poll CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` ถูกยกเลิก
   - `Classifier` — กติกาจัด tier (§5) → `ClassifiedEvent`
   - `Throttler` — dedup key `(kind, actor, tier)` ภายใน 60s รวมเป็น count
   - `EvidenceLog` — เขียน ndjson ลง `~/Library/Logs/NoPeek/`, rotate รายวัน, purge >30 วันตอน start
@@ -56,7 +56,7 @@
 **Data flow:**
 
 ```
-[LogStreamReader] [ProcessWatch 3s] [CameraWatch 2s] [MicWatch 2s]
+[LogStreamReader: screen + camera + mic] [ProcessWatch 3s]
         └──────────────┬───────────────┘
                        ▼
               RawEvent {ts, source, kind, actor, actorPath, pid, raw}
@@ -88,7 +88,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 | B | Remote control สด | `ProcessWatch` เทียบ watchlist (ดู §7) + log stream ของ `screensharingd` | ชื่อ process + path (path ได้เฉพาะ process ของ user ตัวเอง — root-owned agents อาจเห็นแต่ชื่อ) |
 | C | องค์กร (labeling layer ไม่ใช่ sensor) | ทุก `RawEvent` เอา `actor` + `actorPath` ไป match `orgPatterns` (§7) | reason ระบุ pattern ที่ match |
 | D | กล้อง | log stream: subsystem `com.apple.cameracapture` + `startRunning`/`stopRunning` (R21) | actor = แอปที่เปิดกล้อง (processImagePath basename) — attribution ตรงจาก log |
-| E | ไมค์ | `MicWatch` | ไม่มี attribution — แจ้ง "ไมค์ถูกใช้" |
+| E | ไมค์ | log stream: process `coreaudiod` + `PublishRecordingClientInfo` (`Report client <pid> running: yes|no`) | actor = แอปที่บันทึก (resolved จาก client PID: `proc_pidpath` basename, fallback `p_comm`) — attribution ตรงจาก log |
 
 **หมายเหตุความแม่นยำ (จะ validate ตอน implement):** สตริง log จริงของ ScreenCaptureKit/replayd บน macOS 26/27 ต้องทดสอบด้วยการกด ⌘⇧5 ระหว่าง stream (procedure §11) — ถ้าสัญญาณไหนไม่ยิงจริง มี fallback: `tccd` lines + `ProcessWatch` ของ `screencapture`
 
@@ -230,7 +230,7 @@ EvidenceLog  Throttler    TrayModel      Notifier      BannerPresenter
 nopeek/
 ├── Package.swift
 ├── Sources/
-│   ├── PWCore/          (LogStreamReader, ProcessWatch, CameraWatch, MicWatch,
+│   ├── PWCore/          (LogStreamReader, ProcessWatch, ProcessNaming,
 │   │                     Classifier, Throttler, EvidenceLog, ConfigStore,
 │   │                     KillController, ProcessLocation, i18n)
 │   └── NoPeekApp/       (main, StatusItemController, MenuBuilder,

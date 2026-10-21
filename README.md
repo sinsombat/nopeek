@@ -18,7 +18,7 @@ NoPeek is a menu-bar shield (no Dock icon, `LSUIElement`). It watches four obser
 | B | Live remote control | process table against the remote-control watchlist (`screensharingd`, `ARDAgent`, `TeamViewer`, `AnyDesk`, …) plus `screensharingd` log lines | process name + path (path only for your own processes) |
 | C | Org agent (labeling layer, not a sensor) | every event's actor + path is matched against `orgPatterns` (`/Library/ManageEngine/`, `dcondemand`, `PanGPS`, Tanium, …) | which pattern matched |
 | D | Camera | log stream subsystem `com.apple.cameracapture`, `AVCaptureSession startRunning`/`stopRunning` | the app that started the session (Photo Booth, Zoom, …) — direct from the log |
-| E | Microphone | `MicWatch` (CoreAudio device state) | none — "the mic is in use" |
+| E | Microphone | log stream `coreaudiod`, `PublishRecordingClientInfo` recorder-client transitions | the recording app, resolved from the client PID in the log line (Voice Memos, Teams, Zoom, …) |
 
 **System noise — the macOS 26/27 reality.** Mission Control, Stage Manager and other system UI exercise the screen-capture machinery as their normal operation. On this OS family that chatter comes from `WindowManager` (also `Dock`, `ControlCenter`), which NoPeek classifies as `SYSTEM_NOISE`: it is **logged, never notified, never bannered**. That is deliberate — a purple-indicator firehose would drown the signal. If you insist on being told about it anyway, set `"replaceDefaultLists": true` and define your own `systemNoiseExtra` without `WindowManager` (see the config table).
 
@@ -191,7 +191,7 @@ More caveats, so nobody is surprised later:
 
 - On this macOS family the purple screen-capture indicator can come from system tools, not just humans; that traffic is `SYSTEM_NOISE` by default (configurable, see above).
 - **Camera** detection is log-based (from the capturing app's session start/stop lines) — attribution is direct, but an app killed with `pkill`/`SIGTERM` may never log its `stopRunning`, so you may not get the "off" line. Camera/off events are log-only anyway.
-- **Mic** events carry no attribution: they say "the mic is in use", not by whom.
+- **Mic** attribution comes from the client PID `coreaudiod` names in its `PublishRecordingClientInfo` line, resolved to the app at parse time. If the recorder has already exited (the stop line often arrives after the app is gone), the event falls back to `mic` rather than a wrong name; a very short recording that never logged a start may likewise be invisible.
 - **Checkup** uses deep links instead of reading the Screen-Recording permission list (that would need Full Disk Access).
 - **Kill/auto-kill** are user-directed; auto-kill is user-processes-only, never elevates, and a respawned process will keep coming back until the loop guard stops the fight.
 - Killing an org/IT agent may violate corporate policy — every manual kill asks first for this reason.
@@ -248,7 +248,7 @@ NoPeek เฝ้า 4 ช่องทาง และเขียนทุกเ
 | B | ควบคุมระยะไกลสด | ตาราง process เทียบ watchlist (`screensharingd`, `ARDAgent`, TeamViewer, AnyDesk, …) + log ของ `screensharingd` | ชื่อ process + path (path ได้เฉพาะ process ของตัวเอง) |
 | C | agent องค์กร (ชั้นติดป้าย ไม่ใช่เซนเซอร์) | actor + path ของทุก event ถูกจับคู่กับ `orgPatterns` (`/Library/ManageEngine/`, `dcondemand`, `PanGPS`, Tanium, …) | ระบุว่า match pattern ไหน |
 | D | กล้อง | log stream subsystem `com.apple.cameracapture`, `AVCaptureSession startRunning`/`stopRunning` | แอปที่เปิด session (Photo Booth, Zoom, …) — ตรงจาก log |
-| E | ไมค์ | `MicWatch` (สถานะ device ผ่าน CoreAudio) | ไม่มี — บอกแค่ "ไมค์ถูกใช้" |
+| E | ไมค์ | log stream ของ `coreaudiod`, การเปลี่ยนสถานะ recorder client ผ่าน `PublishRecordingClientInfo` | แอปที่บันทึก resolved จาก client PID ในบรรทัด log (Voice Memos, Teams, Zoom, …) |
 
 **เสียงรบกวนของระบบ — ความจริงของ macOS 26/27** Mission Control, Stage Manager และ UI ของระบบใช้กลไกแคปจอเป็นงานปกติ บน macOS ชุดนี้เสียงพวกนั้นมาจาก `WindowManager` (รวม `Dock`, `ControlCenter`) ซึ่ง NoPeek จัดเป็น `SYSTEM_NOISE`: **ลง log อย่างเดียว ไม่แจ้ง ไม่เด้งแบนเนอร์** ตั้งใจแบบนี้ เพราะไม่งั้นสัญญาณจริงจะจม ถ้าอยากรู้แม้กระทั่งเสียงนี้จริง ๆ ตั้ง `"replaceDefaultLists": true` แล้วนิยาม `systemNoiseExtra` ของตัวเองโดยไม่ใส่ `WindowManager` (ดูตาราง config)
 

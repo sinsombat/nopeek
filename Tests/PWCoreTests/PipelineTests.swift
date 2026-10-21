@@ -187,8 +187,8 @@ import PWCore
         let (pipeline, classifier, recorder, _) = makePipeline()
 
         let cases: [(actor: String, kind: EventKind, source: EventSource)] = [
-            ("Photo Booth", .cameraOff, .logstream), // camera stopRunning line (T14)
-            ("mic", .micOff, .mic),                 // mic-poll off edge (T15)
+            ("Photo Booth", .cameraOff, .logstream),   // camera stopRunning line (T14)
+            ("VoiceMemos", .micOff, .logstream),       // coreaudiod recorder stop (v1.1)
         ]
 
         for paused in [false, true] {
@@ -203,6 +203,58 @@ import PWCore
                 #expect(recorder.actions == [.appendLog(expected), .trayUpdate(expected)])
             }
         }
+    }
+
+    @Test func testRealMicLogReplayThroughPipeline() throws {
+        // Controlled replay of the two real probe lines through the shipped
+        // parser *and* this pipeline: the start is a NORMAL notification
+        // (`appendLog` → `notify` → `trayUpdate`), the stop is R20 log-only
+        // (`appendLog` → `trayUpdate`). This is the v1.1 replacement path for
+        // the removed MicWatch poll, exercised end to end without a recorder.
+        let parser = LogLineParser(resolveClient: { pid in
+            pid == 15522
+                ? (name: "VoiceMemos", path: "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos")
+                : nil
+        })
+        let fixture = try #require(
+            Bundle.module.url(
+                forResource: "probe-mic-2026-10-21",
+                withExtension: "ndjson",
+                subdirectory: "Fixtures"
+            )
+        )
+        let lines = try String(contentsOf: fixture, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+
+        let startLine = try #require(
+            lines.first { $0.contains("PublishRecordingClientInfo") && $0.contains("running: yes") }
+        )
+        let stopLine = try #require(
+            lines.first { $0.contains("PublishRecordingClientInfo") && $0.contains("running: no") }
+        )
+
+        let (pipeline, classifier, recorder, _) = makePipeline()
+
+        let start = try #require(parser.parse(line: startLine))
+        #expect(start.kind == .micOn)
+        #expect(start.actor == "VoiceMemos")
+        pipeline.handle(start)
+        let startExpected = classifier.classify(start)
+        #expect(startExpected.tier == .normal)
+        #expect(recorder.actions == [
+            .appendLog(startExpected),
+            .notify(startExpected),
+            .trayUpdate(startExpected),
+        ])
+
+        recorder.reset()
+        let stop = try #require(parser.parse(line: stopLine))
+        #expect(stop.kind == .micOff)
+        #expect(stop.actor == "VoiceMemos")
+        pipeline.handle(stop)
+        let stopExpected = classifier.classify(stop)
+        #expect(recorder.actions == [.appendLog(stopExpected), .trayUpdate(stopExpected)])
     }
 
     // MARK: - REMOTE banner follows the live config closure

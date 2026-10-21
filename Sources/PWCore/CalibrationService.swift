@@ -255,7 +255,7 @@ public struct CalibrationStatus: Equatable, Sendable {
 /// |---|---|---|
 /// | screen | `.screenCapture` from any actor **except `WindowManager`** | R16: Mission Control's `.screenCapture` echo (R14) must not count, so the wizard's ⌘⇧5 is a real capture |
 /// | camera | `.cameraOn` | the T14 log-based signal, actor = capturing app |
-/// | mic | `.micOn` | the T15 mic watch's on-edge |
+/// | mic | `.micOn` | the v1.1 log-based recorder-client start (`coreaudiod`) |
 ///
 /// Every other event — other kinds, other steps' events — is ignored. A later
 /// step's event arriving while an earlier step is current is deliberately *not*
